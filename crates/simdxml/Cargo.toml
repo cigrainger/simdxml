@@ -11,9 +11,13 @@ categories = ["parser-implementations", "text-processing"]
 [dependencies]
 nom = "7"
 thiserror = "2"
+memchr = "2"
 
 [dev-dependencies]
 criterion = "0.5"
+quick-xml = "0.37"
+roxmltree = "0.20"
+xml-rs = "0.8"
 
 [[bench]]
 name = "parse_bench"

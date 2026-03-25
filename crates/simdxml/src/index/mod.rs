@@ -19,7 +19,7 @@ pub struct XmlIndex<'a> {
     pub(crate) tag_ends: Vec<u32>,
 
     /// Tag type classification
-    pub(crate) tag_types: Vec<TagType>,
+    pub tag_types: Vec<TagType>,
 
     /// Tag name: (byte offset, length) into input
     pub(crate) tag_names: Vec<(u32, u16)>,
@@ -32,6 +32,21 @@ pub struct XmlIndex<'a> {
 
     /// Text content ranges: (start_offset, end_offset) for text between tags
     pub(crate) text_ranges: Vec<TextRange>,
+
+    // === Precomputed indices (built by `build_indices()`) ===
+
+    /// CSR children: offsets[i]..offsets[i+1] into child_data gives children of tag i.
+    pub(crate) child_offsets: Vec<u32>,
+    /// Flat array of child tag indices, referenced by child_offsets.
+    pub(crate) child_data: Vec<u32>,
+
+    /// CSR text children: text_offsets[i]..text_offsets[i+1] into text_data.
+    pub(crate) text_child_offsets: Vec<u32>,
+    /// Flat array of text range indices, referenced by text_child_offsets.
+    pub(crate) text_child_data: Vec<u32>,
+
+    /// Matching close tag for each open tag. u32::MAX = no match.
+    pub(crate) close_map: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +71,116 @@ pub struct TextRange {
 }
 
 impl<'a> XmlIndex<'a> {
+    /// Build precomputed indices for fast XPath evaluation.
+    /// Called once after structural parsing. O(n) time, flat memory layout.
+    pub(crate) fn build_indices(&mut self) {
+        let n = self.tag_count();
+
+        // 1. Count children per parent (two-pass CSR build)
+        let mut child_counts = vec![0u32; n + 1];
+        for i in 0..n {
+            let tt = self.tag_types[i];
+            if tt == TagType::Close || tt == TagType::CData {
+                continue;
+            }
+            let parent = self.parents[i];
+            if parent != u32::MAX && (parent as usize) < n {
+                child_counts[parent as usize] += 1;
+            }
+        }
+
+        // Prefix sum → offsets
+        let mut child_offsets = vec![0u32; n + 1];
+        for i in 0..n {
+            child_offsets[i + 1] = child_offsets[i] + child_counts[i];
+        }
+        let total_children = child_offsets[n] as usize;
+        let mut child_data = vec![0u32; total_children];
+
+        // Fill child_data (second pass)
+        let mut write_pos = child_offsets.clone();
+        for i in 0..n {
+            let tt = self.tag_types[i];
+            if tt == TagType::Close || tt == TagType::CData {
+                continue;
+            }
+            let parent = self.parents[i];
+            if parent != u32::MAX && (parent as usize) < n {
+                let p = parent as usize;
+                child_data[write_pos[p] as usize] = i as u32;
+                write_pos[p] += 1;
+            }
+        }
+
+        // 2. CSR for text children
+        let mut text_counts = vec![0u32; n + 1];
+        for range in &self.text_ranges {
+            let parent = range.parent_tag;
+            if parent != u32::MAX && (parent as usize) < n {
+                text_counts[parent as usize] += 1;
+            }
+        }
+        let mut text_child_offsets = vec![0u32; n + 1];
+        for i in 0..n {
+            text_child_offsets[i + 1] = text_child_offsets[i] + text_counts[i];
+        }
+        let total_text = text_child_offsets[n] as usize;
+        let mut text_child_data = vec![0u32; total_text];
+        let mut text_write_pos = text_child_offsets.clone();
+        for (ti, range) in self.text_ranges.iter().enumerate() {
+            let parent = range.parent_tag;
+            if parent != u32::MAX && (parent as usize) < n {
+                let p = parent as usize;
+                text_child_data[text_write_pos[p] as usize] = ti as u32;
+                text_write_pos[p] += 1;
+            }
+        }
+
+        // 3. Close map using a stack (O(n))
+        let mut close_map = vec![u32::MAX; n];
+        let mut stack: Vec<usize> = Vec::new();
+        for i in 0..n {
+            match self.tag_types[i] {
+                TagType::Open => stack.push(i),
+                TagType::Close => {
+                    if let Some(open_idx) = stack.pop() {
+                        close_map[open_idx] = i as u32;
+                    }
+                }
+                TagType::SelfClose => close_map[i] = i as u32,
+                _ => {}
+            }
+        }
+
+        self.child_offsets = child_offsets;
+        self.child_data = child_data;
+        self.text_child_offsets = text_child_offsets;
+        self.text_child_data = text_child_data;
+        self.close_map = close_map;
+    }
+
+    /// Get child tag indices for a parent (from precomputed CSR index).
+    #[inline]
+    pub(crate) fn child_tag_slice(&self, parent_idx: usize) -> &[u32] {
+        if parent_idx >= self.child_offsets.len() - 1 {
+            return &[];
+        }
+        let start = self.child_offsets[parent_idx] as usize;
+        let end = self.child_offsets[parent_idx + 1] as usize;
+        &self.child_data[start..end]
+    }
+
+    /// Get child text range indices for a parent (from precomputed CSR index).
+    #[inline]
+    pub(crate) fn child_text_slice(&self, parent_idx: usize) -> &[u32] {
+        if parent_idx >= self.text_child_offsets.len() - 1 {
+            return &[];
+        }
+        let start = self.text_child_offsets[parent_idx] as usize;
+        let end = self.text_child_offsets[parent_idx + 1] as usize;
+        &self.text_child_data[start..end]
+    }
+
     /// Get the tag name as a string slice.
     pub fn tag_name(&self, tag_idx: usize) -> &'a str {
         if tag_idx >= self.tag_names.len() {
@@ -87,6 +212,12 @@ impl<'a> XmlIndex<'a> {
         if open_idx >= self.tag_count() {
             return None;
         }
+        // Use precomputed close_map if available
+        if !self.close_map.is_empty() {
+            let close = self.close_map[open_idx];
+            return if close != u32::MAX { Some(close as usize) } else { None };
+        }
+        // Fallback: linear scan (used before build_indices)
         if self.tag_types[open_idx] == TagType::SelfClose {
             return Some(open_idx);
         }
@@ -108,24 +239,13 @@ impl<'a> XmlIndex<'a> {
 
     /// Get children (direct child open/self-close tags) of a tag.
     pub fn children(&self, parent_idx: usize) -> Vec<usize> {
-        let mut result = Vec::new();
-        for i in 0..self.tag_count() {
-            if self.parents[i] == parent_idx as u32
-                && (self.tag_types[i] == TagType::Open
-                    || self.tag_types[i] == TagType::SelfClose)
-            {
-                result.push(i);
-            }
-        }
-        result
+        self.child_tag_slice(parent_idx).iter().map(|&i| i as usize).collect()
     }
 
     /// Get text content directly under a tag (not nested).
     pub fn direct_text(&self, tag_idx: usize) -> Vec<&'a str> {
-        self.text_ranges
-            .iter()
-            .filter(|r| r.parent_tag == tag_idx as u32)
-            .map(|r| self.text_content(r))
+        self.child_text_slice(tag_idx).iter()
+            .map(|&ti| self.text_content(&self.text_ranges[ti as usize]))
             .collect()
     }
 

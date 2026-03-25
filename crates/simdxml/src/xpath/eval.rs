@@ -3,6 +3,62 @@ use crate::index::{TagType, XmlIndex};
 use super::ast::*;
 use super::parser::parse_xpath_predicate_expr;
 
+/// Format a number matching libxml2's xmlXPathFormatNumber (%0.15g equivalent).
+fn xpath_format_number(n: f64) -> String {
+    if n.is_nan() { return "NaN".to_string(); }
+    if n == f64::INFINITY { return "Infinity".to_string(); }
+    if n == f64::NEG_INFINITY { return "-Infinity".to_string(); }
+
+    // If it's an integer that fits exactly, format without decimal
+    if n == n.trunc() && n.abs() < 1e15 {
+        return format!("{}", n as i64);
+    }
+
+    // Use %0.15g equivalent: 15 significant digits, strip trailing zeros
+    let abs_n = n.abs();
+    let exp = if abs_n > 0.0 { abs_n.log10().floor() as i32 } else { 0 };
+
+    if exp >= -4 && exp < 15 {
+        // Fixed notation
+        let decimal_digits = (14 - exp).max(0) as usize;
+        let mut s = format!("{:.prec$}", n, prec = decimal_digits);
+        if s.contains('.') {
+            while s.ends_with('0') { s.pop(); }
+            if s.ends_with('.') { s.pop(); }
+        }
+        s
+    } else {
+        // Scientific notation
+        let mut s = format!("{:.14e}", n);
+        // Rust uses e notation; insert + for positive exponent
+        if let Some(e_pos) = s.find('e') {
+            let exp_part = &s[e_pos + 1..];
+            if !exp_part.starts_with('-') && !exp_part.starts_with('+') {
+                s.insert(e_pos + 1, '+');
+            }
+        }
+        // Strip trailing zeros in mantissa before 'e'
+        if let Some(e_pos) = s.find('e') {
+            let (mantissa, exp_str) = s.split_at(e_pos);
+            let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+            s = format!("{}{}", mantissa, exp_str);
+        }
+        // Remove leading zeros from exponent (Rust may produce e+019 etc.)
+        if let Some(e_pos) = s.find('e') {
+            let sign_start = e_pos + 1;
+            let (prefix, exp_part) = s.split_at(sign_start);
+            let (sign, digits) = if exp_part.starts_with('-') || exp_part.starts_with('+') {
+                (&exp_part[..1], exp_part[1..].trim_start_matches('0'))
+            } else {
+                ("", exp_part.trim_start_matches('0'))
+            };
+            let digits = if digits.is_empty() { "0" } else { digits };
+            s = format!("{}{}{}",  prefix, sign, digits);
+        }
+        s
+    }
+}
+
 /// A node in the XPath result set.
 #[derive(Debug, Clone, Copy)]
 pub enum XPathNode {
@@ -10,6 +66,8 @@ pub enum XPathNode {
     Text(usize),                 // index into text_ranges
     /// (tag_idx, attr_name_hash) — hash used for fast comparison
     Attribute(usize, u64),
+    /// (owning_element_idx, prefix_hash) — namespace node
+    Namespace(usize, u64),
 }
 
 /// Hash an attribute name for storage in XPathNode.
@@ -61,10 +119,31 @@ pub fn evaluate<'a>(
             for e in exprs {
                 result.extend(evaluate(index, e)?);
             }
+            // Union results must be in document order, deduplicated
+            dedup_nodes(&mut result);
+            sort_doc_order(index, &mut result);
+            Ok(result)
+        }
+        XPathExpr::FunctionCall(name, args) if name == "id" => {
+            eval_id_function(index, args)
+        }
+        XPathExpr::FilterPath(inner, steps) => {
+            let initial = evaluate(index, inner)?;
+            let mut context = initial;
+            for step in steps {
+                context = eval_step(index, &context, step)?;
+            }
+            Ok(context)
+        }
+        XPathExpr::GlobalFilter(inner, preds) => {
+            let mut result = evaluate(index, inner)?;
+            for pred in preds {
+                result = apply_predicate(index, &result, pred)?;
+            }
             Ok(result)
         }
         _ => Err(SimdXmlError::XPathEvalError(
-            "Only location paths and unions are supported".into(),
+            "Only location paths, unions, and id() are supported".into(),
         )),
     }
 }
@@ -95,6 +174,7 @@ pub fn eval_text<'a>(
             XPathNode::Attribute(tag_idx, _) => {
                 // Placeholder — attribute value extraction
             }
+            XPathNode::Namespace(_, _) => {}
         }
     }
     Ok(results)
@@ -103,6 +183,27 @@ pub fn eval_text<'a>(
 /// Sentinel index for the virtual document root.
 const DOC_ROOT: usize = usize::MAX;
 
+/// Evaluate id('value') — find element with matching ID attribute.
+fn eval_id_function(index: &XmlIndex, args: &[XPathExpr]) -> Result<Vec<XPathNode>> {
+    let id_value = match args.first() {
+        Some(XPathExpr::StringLiteral(s)) => s.clone(),
+        _ => return Ok(vec![]),
+    };
+
+    // Search all elements for an "id" attribute matching the value
+    for i in 0..index.tag_count() {
+        if index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose {
+            if let Some(val) = index.get_attribute(i, "id") {
+                if val == id_value {
+                    return Ok(vec![XPathNode::Element(i)]);
+                }
+            }
+        }
+    }
+
+    Ok(vec![])
+}
+
 fn eval_location_path<'a>(
     index: &'a XmlIndex<'a>,
     path: &LocationPath,
@@ -110,16 +211,133 @@ fn eval_location_path<'a>(
     let mut context: Vec<XPathNode> = if path.absolute {
         vec![XPathNode::Element(DOC_ROOT)]
     } else {
-        // Relative path at top level: evaluate from document root's children
-        // (XPath spec: context node is the root node of the document)
-        vec![XPathNode::Element(DOC_ROOT)]
+        let root_elem = (0..index.tag_count())
+            .find(|&i| index.depths[i] == 0 && index.tag_types[i] == TagType::Open)
+            .unwrap_or(0);
+        vec![XPathNode::Element(root_elem)]
     };
 
-    for step in &path.steps {
-        context = eval_step(index, &context, step)?;
+    // Fuse steps: look ahead for optimizable patterns
+    let steps = &path.steps;
+    let mut i = 0;
+    while i < steps.len() {
+        // Pattern: DescendantOrSelf::node() + child::Name(x) [no predicates on desc step]
+        //   → fused descendant scan (avoids materializing mega intermediate set)
+        if i + 1 < steps.len()
+            && steps[i].axis == Axis::DescendantOrSelf
+            && steps[i].node_test == NodeTest::Node
+            && steps[i].predicates.is_empty()
+            && steps[i + 1].axis == Axis::Child
+        {
+            context = eval_fused_descendant_child(index, &context, &steps[i + 1])?;
+            i += 2;
+        } else {
+            context = eval_step(index, &context, &steps[i])?;
+            i += 1;
+        }
     }
 
     Ok(context)
+}
+
+/// Fused descendant-or-self::node()/child::test[preds] — single pass over all tags.
+/// For `//claim`, this scans once for all elements named "claim" instead of
+/// materializing every node as an intermediate context set.
+fn eval_fused_descendant_child(
+    index: &XmlIndex,
+    context: &[XPathNode],
+    child_step: &Step,
+) -> Result<Vec<XPathNode>> {
+    let mut result = Vec::new();
+
+    for &ctx_node in context {
+        let (scan_start, scan_end) = match ctx_node {
+            XPathNode::Element(DOC_ROOT) => (0, index.tag_count()),
+            XPathNode::Element(idx) if idx < index.tag_count() => {
+                let close = index.matching_close(idx).unwrap_or(index.tag_count());
+                (idx, close)
+            }
+            _ => continue,
+        };
+
+        // Single scan: find all matching nodes within scope
+        let mut matched: Vec<XPathNode> = Vec::new();
+
+        match &child_step.node_test {
+            NodeTest::Name(name) => {
+                // Fast path: scan for elements by name
+                for j in scan_start..scan_end {
+                    let tt = index.tag_types[j];
+                    if (tt == TagType::Open || tt == TagType::SelfClose)
+                        && index.tag_name(j) == name.as_str()
+                    {
+                        matched.push(XPathNode::Element(j));
+                    }
+                }
+            }
+            NodeTest::Text => {
+                // All text nodes within scope
+                for (ti, range) in index.text_ranges.iter().enumerate() {
+                    let p = range.parent_tag as usize;
+                    if p >= scan_start && p < scan_end {
+                        matched.push(XPathNode::Text(ti));
+                    }
+                }
+            }
+            NodeTest::Wildcard => {
+                for j in scan_start..scan_end {
+                    let tt = index.tag_types[j];
+                    if tt == TagType::Open || tt == TagType::SelfClose {
+                        matched.push(XPathNode::Element(j));
+                    }
+                }
+            }
+            NodeTest::Node => {
+                // All nodes within scope
+                for j in scan_start..scan_end {
+                    if is_node_tag(index.tag_types[j]) {
+                        matched.push(XPathNode::Element(j));
+                    }
+                }
+                for (ti, range) in index.text_ranges.iter().enumerate() {
+                    let p = range.parent_tag as usize;
+                    if p >= scan_start && p < scan_end {
+                        matched.push(XPathNode::Text(ti));
+                    }
+                }
+            }
+            NodeTest::Comment => {
+                for j in scan_start..scan_end {
+                    if index.tag_types[j] == TagType::Comment {
+                        matched.push(XPathNode::Element(j));
+                    }
+                }
+            }
+            _ => {
+                // Fallback: use unfused path
+                let desc = eval_descendant_axis(index, ctx_node, true);
+                for dn in desc {
+                    let children = eval_child_axis(index, dn);
+                    for c in children {
+                        if matches_node_test(index, c, &child_step.node_test) {
+                            matched.push(c);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply predicates per-context-node
+        for pred in &child_step.predicates {
+            matched = apply_predicate(index, &matched, pred)?;
+        }
+
+        result.extend(matched);
+    }
+
+    dedup_nodes(&mut result);
+    sort_doc_order(index, &mut result);
+    Ok(result)
 }
 
 fn eval_step<'a>(
@@ -146,7 +364,7 @@ fn eval_step<'a>(
             Axis::Preceding => eval_preceding_axis(index, node),
             Axis::SelfAxis => vec![node],
             Axis::Attribute => eval_attribute_axis(index, node, &step.node_test),
-            Axis::Namespace => vec![],
+            Axis::Namespace => eval_namespace_axis(index, node),
         };
 
         // Filter by node test
@@ -164,8 +382,9 @@ fn eval_step<'a>(
     }
 
     // XPath node sets are always unique, in document order.
-    // Deduplicate by node identity.
+    // Deduplicate by node identity, then sort.
     dedup_nodes(&mut result);
+    sort_doc_order(index, &mut result);
 
     Ok(result)
 }
@@ -176,10 +395,25 @@ fn dedup_nodes(nodes: &mut Vec<XPathNode>) {
         let key = match n {
             XPathNode::Element(idx) => (0, *idx),
             XPathNode::Text(idx) => (1, *idx),
-            XPathNode::Attribute(idx, h) => (2, *idx),
+            XPathNode::Attribute(idx, _h) => (2, *idx),
+            XPathNode::Namespace(idx, h) => (3, *idx ^ (*h as usize)),
         };
         seen.insert(key)
     });
+}
+
+fn node_doc_pos(index: &XmlIndex, node: &XPathNode) -> u32 {
+    match node {
+        XPathNode::Element(idx) if *idx < index.tag_count() => index.tag_starts[*idx],
+        XPathNode::Text(idx) if *idx < index.text_ranges.len() => index.text_ranges[*idx].start,
+        XPathNode::Attribute(idx, _) if *idx < index.tag_count() => index.tag_starts[*idx],
+        XPathNode::Namespace(idx, _) if *idx < index.tag_count() => index.tag_starts[*idx],
+        _ => u32::MAX,
+    }
+}
+
+fn sort_doc_order(index: &XmlIndex, nodes: &mut Vec<XPathNode>) {
+    nodes.sort_by_key(|n| node_doc_pos(index, n));
 }
 
 /// Apply a predicate to filter a node set.
@@ -206,10 +440,13 @@ fn apply_predicate<'a>(
 
         // Unary minus in predicate: [-N] means position at negative index = empty
         XPathExpr::UnaryMinus(inner) => {
+            if nodes.is_empty() {
+                return Ok(vec![]);
+            }
             // Evaluate the inner expression as a number
             let val = eval_predicate_value(index, nodes[0], inner, 1, nodes.len())?;
             let n = -(val.as_number());
-            if n.is_nan() || n < 1.0 || n > nodes.len() as f64 {
+            if n.is_nan() || n.is_infinite() || n < 1.0 || n > nodes.len() as f64 {
                 Ok(vec![])
             } else {
                 let pos = n.round() as usize;
@@ -282,7 +519,7 @@ impl XPathValue {
     fn as_string(&self) -> String {
         match self {
             XPathValue::String(s) => s.clone(),
-            XPathValue::Number(n) => n.to_string(),
+            XPathValue::Number(n) => xpath_format_number(*n),
             XPathValue::Boolean(b) => b.to_string(),
         }
     }
@@ -582,6 +819,36 @@ fn eval_function(
             };
             Ok(XPathValue::Boolean(val.is_truthy()))
         }
+        "lang" => {
+            // lang(string) — true if context node's xml:lang matches the argument.
+            // Walks ancestors looking for xml:lang attribute, case-insensitive match.
+            if let Some(arg) = args.first() {
+                let target = eval_predicate_value(index, node, arg, position, size)?.as_string();
+                if target.is_empty() {
+                    return Ok(XPathValue::Boolean(false));
+                }
+                let target_lower = target.to_ascii_lowercase();
+                // Walk node and ancestors looking for xml:lang
+                let mut current = match node {
+                    XPathNode::Element(idx) if idx != DOC_ROOT => Some(idx),
+                    _ => None,
+                };
+                while let Some(idx) = current {
+                    if let Some(lang_val) = index.get_attribute(idx, "xml:lang") {
+                        let lang_lower = lang_val.to_ascii_lowercase();
+                        let matches = lang_lower == target_lower
+                            || (lang_lower.starts_with(&target_lower)
+                                && lang_lower.as_bytes().get(target_lower.len()) == Some(&b'-'));
+                        return Ok(XPathValue::Boolean(matches));
+                    }
+                    let parent = index.parents[idx];
+                    current = if parent != u32::MAX { Some(parent as usize) } else { None };
+                }
+                Ok(XPathValue::Boolean(false))
+            } else {
+                Ok(XPathValue::Boolean(false))
+            }
+        }
         _ => Ok(XPathValue::String(String::new())),
     }
 }
@@ -667,6 +934,9 @@ fn matches_node_test(index: &XmlIndex, node: XPathNode, test: &NodeTest) -> bool
         }
         (XPathNode::Element(idx), NodeTest::PI) => index.tag_types[idx] == TagType::PI,
         (XPathNode::Attribute(_, _), NodeTest::Name(_)) => true, // already matched in axis
+        // Namespace nodes: match by prefix name or wildcard
+        (XPathNode::Namespace(_, hash), NodeTest::Name(name)) => hash == attr_name_hash(name),
+        (XPathNode::Namespace(_, _), NodeTest::Wildcard) => true,
         _ => false,
     }
 }
@@ -680,44 +950,58 @@ fn eval_child_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
         return vec![];
     };
 
-    let mut result: Vec<XPathNode> = Vec::new();
-
     if parent_idx == DOC_ROOT {
-        // Document root's children are depth-0 elements
+        // Document root's children are depth-0 elements/comments/PIs
+        let mut children_with_pos: Vec<(u32, XPathNode)> = Vec::new();
         for i in 0..index.tag_count() {
-            if index.depths[i] == 0
-                && (index.tag_types[i] == TagType::Open
-                    || index.tag_types[i] == TagType::SelfClose)
+            if index.depths[i] == 0 && is_node_tag(index.tag_types[i])
+                && index.tag_types[i] != TagType::Close
             {
-                result.push(XPathNode::Element(i));
+                children_with_pos.push((index.tag_starts[i], XPathNode::Element(i)));
             }
         }
-        return result;
+        children_with_pos.sort_by_key(|(pos, _)| *pos);
+        return children_with_pos.into_iter().map(|(_, node)| node).collect();
     }
 
-    // Collect children with byte offsets for document-order sorting
-    let mut children_with_pos: Vec<(u32, XPathNode)> = Vec::new();
+    // Use precomputed CSR child indices — O(children_count) instead of O(N)
+    let tags = index.child_tag_slice(parent_idx);
+    let texts = index.child_text_slice(parent_idx);
 
-    // Child elements
-    for i in 0..index.tag_count() {
-        if index.parents[i] == parent_idx as u32
-            && (index.tag_types[i] == TagType::Open
-                || index.tag_types[i] == TagType::SelfClose)
-        {
-            children_with_pos.push((index.tag_starts[i], XPathNode::Element(i)));
+    // Fast path: no text children → just return tag children (already in doc order)
+    if texts.is_empty() {
+        return tags.iter().map(|&i| XPathNode::Element(i as usize)).collect();
+    }
+
+    // Merge tag children and text children in document order
+    let mut result = Vec::with_capacity(tags.len() + texts.len());
+    let mut ti = 0;
+    let mut xi = 0;
+    while ti < tags.len() && xi < texts.len() {
+        let tag_pos = index.tag_starts[tags[ti] as usize];
+        let txt_pos = index.text_ranges[texts[xi] as usize].start;
+        if tag_pos < txt_pos {
+            result.push(XPathNode::Element(tags[ti] as usize));
+            ti += 1;
+        } else {
+            result.push(XPathNode::Text(texts[xi] as usize));
+            xi += 1;
         }
     }
-
-    // Child text nodes
-    for (i, range) in index.text_ranges.iter().enumerate() {
-        if range.parent_tag == parent_idx as u32 {
-            children_with_pos.push((range.start, XPathNode::Text(i)));
-        }
+    while ti < tags.len() {
+        result.push(XPathNode::Element(tags[ti] as usize));
+        ti += 1;
     }
+    while xi < texts.len() {
+        result.push(XPathNode::Text(texts[xi] as usize));
+        xi += 1;
+    }
+    result
+}
 
-    // Sort by document position
-    children_with_pos.sort_by_key(|(pos, _)| *pos);
-    children_with_pos.into_iter().map(|(_, node)| node).collect()
+fn is_node_tag(tt: TagType) -> bool {
+    // CData is not included: its content is already a text range (text node).
+    matches!(tt, TagType::Open | TagType::SelfClose | TagType::Comment | TagType::PI)
 }
 
 fn eval_descendant_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -> Vec<XPathNode> {
@@ -726,31 +1010,36 @@ fn eval_descendant_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -
     };
 
     if start_idx == DOC_ROOT {
-        // Descendants of document root = all elements + text nodes
-        let mut result = Vec::new();
+        // Descendants of document root = all node types, in document order
+        let mut items: Vec<(u32, XPathNode)> = Vec::new();
+        if include_self {
+            items.push((0, XPathNode::Element(DOC_ROOT)));
+        }
         for i in 0..index.tag_count() {
-            if index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose {
-                result.push(XPathNode::Element(i));
+            if is_node_tag(index.tag_types[i]) {
+                items.push((index.tag_starts[i], XPathNode::Element(i)));
             }
         }
         for i in 0..index.text_ranges.len() {
-            result.push(XPathNode::Text(i));
+            // Skip root-level text (whitespace between PI and root element)
+            if index.text_ranges[i].parent_tag == u32::MAX {
+                continue;
+            }
+            items.push((index.text_ranges[i].start, XPathNode::Text(i)));
         }
-        return result;
+        items.sort_by_key(|(pos, _)| *pos);
+        return items.into_iter().map(|(_, node)| node).collect();
     }
 
-    let mut result = Vec::new();
+    let mut items: Vec<(u32, XPathNode)> = Vec::new();
     if include_self {
-        result.push(node);
+        items.push((index.tag_starts[start_idx], node));
     }
 
-    let _start_depth = index.depths[start_idx];
-
-    // All tags after start_idx until depth returns to start_depth
     let close_idx = index.matching_close(start_idx).unwrap_or(index.tag_count());
     for i in (start_idx + 1)..close_idx {
-        if index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose {
-            result.push(XPathNode::Element(i));
+        if is_node_tag(index.tag_types[i]) {
+            items.push((index.tag_starts[i], XPathNode::Element(i)));
         }
     }
 
@@ -758,11 +1047,12 @@ fn eval_descendant_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -
     for (i, range) in index.text_ranges.iter().enumerate() {
         let parent = range.parent_tag as usize;
         if parent >= start_idx && parent < close_idx {
-            result.push(XPathNode::Text(i));
+            items.push((range.start, XPathNode::Text(i)));
         }
     }
 
-    result
+    items.sort_by_key(|(pos, _)| *pos);
+    items.into_iter().map(|(_, node)| node).collect()
 }
 
 fn eval_parent_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
@@ -783,7 +1073,8 @@ fn eval_parent_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
                 vec![]
             }
         }
-        _ => vec![],
+        XPathNode::Attribute(tag_idx, _) => vec![XPathNode::Element(tag_idx)],
+        XPathNode::Namespace(elem_idx, _) => vec![XPathNode::Element(elem_idx)],
     }
 }
 
@@ -796,7 +1087,8 @@ fn eval_ancestor_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -> 
     let mut current = match node {
         XPathNode::Element(idx) => index.parents[idx],
         XPathNode::Text(idx) => index.text_ranges[idx].parent_tag,
-        _ => u32::MAX,
+        XPathNode::Attribute(tag_idx, _) => tag_idx as u32, // attribute's parent is its element
+        XPathNode::Namespace(elem_idx, _) => elem_idx as u32, // namespace's parent is its element
     };
 
     while current != u32::MAX {
@@ -852,8 +1144,10 @@ fn eval_preceding_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNo
 }
 
 fn eval_following_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
-    let XPathNode::Element(idx) = node else {
-        return vec![];
+    let idx = match node {
+        XPathNode::Element(i) => i,
+        XPathNode::Namespace(i, _) | XPathNode::Attribute(i, _) => i,
+        _ => return vec![],
     };
     if idx == DOC_ROOT || idx >= index.tag_count() {
         return vec![];
@@ -872,8 +1166,10 @@ fn eval_following_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
 }
 
 fn eval_preceding_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
-    let XPathNode::Element(idx) = node else {
-        return vec![];
+    let idx = match node {
+        XPathNode::Element(i) => i,
+        XPathNode::Namespace(i, _) | XPathNode::Attribute(i, _) => i,
+        _ => return vec![],
     };
     if idx == DOC_ROOT || idx >= index.tag_count() {
         return vec![];
@@ -927,6 +1223,47 @@ fn eval_attribute_axis(
         }
         _ => vec![],
     }
+}
+
+/// Namespace axis: returns in-scope namespace nodes for an element.
+/// Walks ancestors to collect inherited xmlns: declarations, plus the built-in `xml` namespace.
+fn eval_namespace_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
+    let XPathNode::Element(idx) = node else {
+        return vec![];
+    };
+    if idx == DOC_ROOT || idx >= index.tag_count() {
+        return vec![];
+    }
+
+    // Collect all in-scope namespaces by walking up from this element.
+    // Later declarations override earlier ones (closer ancestor wins).
+    let mut ns_map: Vec<(String, u64)> = Vec::new();
+    let mut seen_prefixes = std::collections::HashSet::new();
+
+    let mut current = Some(idx);
+    while let Some(cur_idx) = current {
+        if cur_idx < index.tag_count()
+            && (index.tag_types[cur_idx] == TagType::Open || index.tag_types[cur_idx] == TagType::SelfClose)
+        {
+            for (prefix, _uri) in index.get_namespace_decls(cur_idx) {
+                if seen_prefixes.insert(prefix.to_string()) {
+                    ns_map.push((prefix.to_string(), attr_name_hash(prefix)));
+                }
+            }
+        }
+        let parent = index.parents[cur_idx];
+        current = if parent != u32::MAX { Some(parent as usize) } else { None };
+    }
+
+    // Always include the built-in `xml` namespace
+    if seen_prefixes.insert("xml".to_string()) {
+        ns_map.push(("xml".to_string(), attr_name_hash("xml")));
+    }
+
+    // Return namespace nodes (owned by this element)
+    ns_map.into_iter()
+        .map(|(_, hash)| XPathNode::Namespace(idx, hash))
+        .collect()
 }
 
 #[cfg(test)]

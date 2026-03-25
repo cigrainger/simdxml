@@ -1,8 +1,10 @@
 use crate::error::{Result, SimdXmlError};
 use crate::index::{TagType, TextRange, XmlIndex};
+use memchr::{memchr, memchr2};
 
-/// Build an XmlIndex from XML bytes using the scalar (non-SIMD) parser.
-/// This is the reference implementation — correct but not fast.
+/// Build an XmlIndex from XML bytes.
+/// Uses SIMD-accelerated byte scanning (via memchr) for finding structural
+/// characters, with sequential processing for tag classification and index building.
 /// Phase 2 replaces this with SIMD for the structural character detection.
 pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
     let mut index = XmlIndex {
@@ -14,6 +16,11 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
         depths: Vec::new(),
         parents: Vec::new(),
         text_ranges: Vec::new(),
+        child_offsets: Vec::new(),
+        child_data: Vec::new(),
+        text_child_offsets: Vec::new(),
+        text_child_data: Vec::new(),
+        close_map: Vec::new(),
     };
 
     let mut pos = 0;
@@ -21,8 +28,11 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
     let mut parent_stack: Vec<u32> = Vec::new(); // stack of open tag indices
     let mut last_tag_end: usize = 0; // for tracking text content
 
-    while pos < input.len() {
-        if input[pos] == b'<' {
+    // Main loop: use SIMD-accelerated memchr to find '<' positions
+    while let Some(offset) = memchr(b'<', &input[pos..]) {
+        pos += offset;
+
+        {
             // Text content between previous tag end and this tag start
             let text_start = if last_tag_end > 0 {
                 last_tag_end + 1
@@ -30,26 +40,22 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                 0
             };
             if text_start < pos {
-                // Include ALL text nodes, even whitespace-only.
-                // XPath node() requires whitespace text nodes.
-                {
-                    let parent = parent_stack.last().copied().unwrap_or(u32::MAX);
-                    index.text_ranges.push(TextRange {
-                        start: text_start as u32,
-                        end: pos as u32,
-                        parent_tag: parent,
-                    });
-                }
+                let parent = parent_stack.last().copied().unwrap_or(u32::MAX);
+                index.text_ranges.push(TextRange {
+                    start: text_start as u32,
+                    end: pos as u32,
+                    parent_tag: parent,
+                });
             }
+        }
 
-            let tag_start = pos;
+        let tag_start = pos;
 
-            // Determine tag type
-            if pos + 1 >= input.len() {
-                return Err(SimdXmlError::UnclosedTag(pos));
-            }
+        if pos + 1 >= input.len() {
+            return Err(SimdXmlError::UnclosedTag(pos));
+        }
 
-            match input[pos + 1] {
+        match input[pos + 1] {
                 b'/' => {
                     // Close tag: </name>
                     pos += 2;
@@ -59,11 +65,10 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     }
                     let name_end = pos;
 
-                    // Skip to >
-                    while pos < input.len() && input[pos] != b'>' {
-                        pos += 1;
-                    }
-                    if pos >= input.len() {
+                    // Skip to > (SIMD-accelerated)
+                    if let Some(off) = memchr(b'>', &input[pos..]) {
+                        pos += off;
+                    } else {
                         return Err(SimdXmlError::UnclosedTag(tag_start));
                     }
 
@@ -142,9 +147,9 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                         last_tag_end = pos;
                         pos += 1;
                     } else {
-                        // DOCTYPE or other <!...> — skip
-                        while pos < input.len() && input[pos] != b'>' {
-                            pos += 1;
+                        // DOCTYPE or other <!...> — skip (SIMD-accelerated)
+                        if let Some(off) = memchr(b'>', &input[pos..]) {
+                            pos += off;
                         }
                         last_tag_end = pos;
                         pos += 1;
@@ -199,24 +204,24 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     }
                     let name_end = pos;
 
-                    // Skip attributes to find > or />
+                    // Skip attributes to find > or /> (SIMD-accelerated quote skipping)
                     let mut self_closing = false;
                     while pos < input.len() && input[pos] != b'>' {
                         if input[pos] == b'/' && pos + 1 < input.len() && input[pos + 1] == b'>' {
                             self_closing = true;
-                            pos += 1; // skip /, will hit > next
+                            pos += 1;
                             break;
                         }
-                        // Skip quoted attribute values
+                        // Skip quoted attribute values using SIMD-accelerated memchr
                         if input[pos] == b'"' {
                             pos += 1;
-                            while pos < input.len() && input[pos] != b'"' {
-                                pos += 1;
+                            if let Some(off) = memchr(b'"', &input[pos..]) {
+                                pos += off;
                             }
                         } else if input[pos] == b'\'' {
                             pos += 1;
-                            while pos < input.len() && input[pos] != b'\'' {
-                                pos += 1;
+                            if let Some(off) = memchr(b'\'', &input[pos..]) {
+                                pos += off;
                             }
                         }
                         pos += 1;
@@ -253,13 +258,12 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     pos += 1;
                 }
             }
-        } else {
-            pos += 1;
         }
-    }
 
+    index.build_indices();
     Ok(index)
 }
+
 
 #[cfg(test)]
 mod tests {

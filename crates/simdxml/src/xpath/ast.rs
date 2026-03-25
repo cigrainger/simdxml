@@ -17,6 +17,10 @@ pub enum XPathExpr {
     UnaryMinus(Box<XPathExpr>),
     /// Union: a | b
     Union(Vec<XPathExpr>),
+    /// Filter/path expression: id('x')/p[1] — primary expr followed by path steps
+    FilterPath(Box<XPathExpr>, Vec<Step>),
+    /// Global filter: (expr)[pred] — evaluate expr, then filter whole result with predicates
+    GlobalFilter(Box<XPathExpr>, Vec<XPathExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

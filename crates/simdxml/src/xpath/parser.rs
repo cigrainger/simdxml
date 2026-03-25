@@ -42,11 +42,14 @@ fn xpath_expr(input: &str) -> IResult<&str, XPathExpr> {
 /// Function call optionally followed by a path: id('x')/p[1]
 fn function_path_expr(input: &str) -> IResult<&str, XPathExpr> {
     let (input, func) = function_call_expr(input)?;
-    // Check for following path steps (e.g., id('x')/p)
+    // Check for following path steps (e.g., id('x')/p or id('x')//p)
     if input.starts_with('/') {
-        // TODO: chain function result with path steps
-        // For now, just return the function call
-        Ok((input, func))
+        let (input, steps) = parse_continuation_steps(input)?;
+        if steps.is_empty() {
+            Ok((input, func))
+        } else {
+            Ok((input, XPathExpr::FilterPath(Box::new(func), steps)))
+        }
     } else {
         // Check for predicates: id('x')[1]
         let (input, preds) = predicates(input)?;
@@ -71,18 +74,8 @@ fn parenthesized_filter(input: &str) -> IResult<&str, XPathExpr> {
         // Just parenthesized, no filter
         Ok((input, inner))
     } else {
-        // Wrap in a FilterExpr (we'll reuse the LocationPath predicate mechanism)
-        // For now, convert to a path with predicates applied
-        match inner {
-            XPathExpr::LocationPath(mut path) => {
-                // Apply predicates to the last step
-                if let Some(last) = path.steps.last_mut() {
-                    last.predicates.extend(preds);
-                }
-                Ok((input, XPathExpr::LocationPath(path)))
-            }
-            _ => Ok((input, inner)), // Can't apply predicates to non-path
-        }
+        // GlobalFilter: evaluate inner, then apply predicates to the whole result set
+        Ok((input, XPathExpr::GlobalFilter(Box::new(inner), preds)))
     }
 }
 
@@ -102,6 +95,38 @@ fn union_expr(input: &str) -> IResult<&str, XPathExpr> {
     }
 }
 
+/// Parse continuation steps after a primary expression: /p, //p, /p[1]/q
+fn parse_continuation_steps(input: &str) -> IResult<&str, Vec<Step>> {
+    let mut steps = Vec::new();
+    let mut input = input;
+
+    loop {
+        if input.starts_with("//") {
+            input = &input[2..];
+            steps.push(Step {
+                axis: Axis::DescendantOrSelf,
+                node_test: NodeTest::Node,
+                predicates: vec![],
+            });
+            let (rest, s) = step(input)?;
+            steps.push(s);
+            input = rest;
+        } else if input.starts_with('/') {
+            input = &input[1..];
+            if input.is_empty() || input.starts_with('|') || input.starts_with(')') {
+                break;
+            }
+            let (rest, s) = step(input)?;
+            steps.push(s);
+            input = rest;
+        } else {
+            break;
+        }
+    }
+
+    Ok((input, steps))
+}
+
 fn location_path_expr(input: &str) -> IResult<&str, XPathExpr> {
     let (input, path) = location_path(input)?;
     Ok((input, XPathExpr::LocationPath(path)))
@@ -117,17 +142,19 @@ fn absolute_path(input: &str) -> IResult<&str, LocationPath> {
 
     // Check for // at root
     if input.starts_with('/') {
-        let (input, _) = char('/')(input)?;
-        let (input, mut steps) = separated_list1(char('/'), step)(input)?;
-        // Prepend descendant-or-self::node() for //
-        steps.insert(
-            0,
+        let input = &input[1..]; // consume second /
+        let (input, first) = step(input)?;
+        let mut steps = vec![
             Step {
                 axis: Axis::DescendantOrSelf,
                 node_test: NodeTest::Node,
                 predicates: vec![],
             },
-        );
+            first,
+        ];
+        // Parse remaining steps with // support
+        let (input, more) = parse_continuation_steps(input)?;
+        steps.extend(more);
         Ok((
             input,
             LocationPath {
@@ -135,7 +162,7 @@ fn absolute_path(input: &str) -> IResult<&str, LocationPath> {
                 steps,
             },
         ))
-    } else if input.is_empty() || input.starts_with('|') || input.starts_with(')') {
+    } else if input.is_empty() || input.starts_with('|') || input.starts_with(')') || input.starts_with(']') {
         // Bare / — select root
         Ok((
             input,
@@ -145,14 +172,10 @@ fn absolute_path(input: &str) -> IResult<&str, LocationPath> {
             },
         ))
     } else {
-        let (input, steps) = separated_list1(
-            alt((
-                // Handle // within path
-                nom::combinator::map(tag("//"), |_| true),
-                nom::combinator::map(char('/'), |_| false),
-            )),
-            step,
-        )(input)?;
+        let (input, first) = step(input)?;
+        let mut steps = vec![first];
+        let (input, more) = parse_continuation_steps(input)?;
+        steps.extend(more);
         Ok((
             input,
             LocationPath {
@@ -166,13 +189,17 @@ fn absolute_path(input: &str) -> IResult<&str, LocationPath> {
 /// Abbreviated descendant: //step/step/...
 fn abbreviated_descendant_path(input: &str) -> IResult<&str, LocationPath> {
     let (input, _) = tag("//")(input)?;
-    let (input, steps) = separated_list1(char('/'), step)(input)?;
-    let mut all_steps = vec![Step {
-        axis: Axis::DescendantOrSelf,
-        node_test: NodeTest::Node,
-        predicates: vec![],
-    }];
-    all_steps.extend(steps);
+    let (input, first) = step(input)?;
+    let mut all_steps = vec![
+        Step {
+            axis: Axis::DescendantOrSelf,
+            node_test: NodeTest::Node,
+            predicates: vec![],
+        },
+        first,
+    ];
+    let (input, more) = parse_continuation_steps(input)?;
+    all_steps.extend(more);
     Ok((
         input,
         LocationPath {
@@ -184,7 +211,10 @@ fn abbreviated_descendant_path(input: &str) -> IResult<&str, LocationPath> {
 
 /// Relative path: step/step/...
 fn relative_path(input: &str) -> IResult<&str, LocationPath> {
-    let (input, steps) = separated_list1(char('/'), step)(input)?;
+    let (input, first) = step(input)?;
+    let mut steps = vec![first];
+    let (input, more) = parse_continuation_steps(input)?;
+    steps.extend(more);
     Ok((
         input,
         LocationPath {

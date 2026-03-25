@@ -53,11 +53,21 @@ fn parse_expected(result_text: &str) -> HashMap<String, ExpectedResult> {
             if !rest.is_empty() && trimmed.chars().next().map_or(false, |c| c.is_ascii_digit()) {
                 if let Some(name) = rest.strip_prefix("ELEMENT ") {
                     let name = name.split_whitespace().next().unwrap_or(name);
+                    // Decode libxml2's hex-encoded UTF-8 bytes (e.g., #E6#96#87)
+                    let name = if name.starts_with('#') && name.contains('#') {
+                        let bytes: Vec<u8> = name.split('#').filter(|s| !s.is_empty())
+                            .filter_map(|hex| u8::from_str_radix(hex, 16).ok()).collect();
+                        String::from_utf8(bytes).unwrap_or_else(|_| name.to_string())
+                    } else {
+                        name.to_string()
+                    };
                     current_nodes.push(format!("ELEMENT:{}", name));
                 } else if rest.starts_with("TEXT") {
                     current_nodes.push("TEXT".to_string());
                 } else if rest.starts_with("COMMENT") {
                     current_nodes.push("COMMENT".to_string());
+                } else if rest.starts_with("CDATA_SECTION") {
+                    current_nodes.push("TEXT".to_string()); // XPath treats CDATA as text
                 }
             }
         }
@@ -75,8 +85,15 @@ fn parse_expected(result_text: &str) -> HashMap<String, ExpectedResult> {
 }
 
 fn nodes_to_descriptions(index: &simdxml::XmlIndex, nodes: &[XPathNode]) -> Vec<String> {
+    use simdxml::index::TagType;
     nodes.iter().filter_map(|n| match n {
-        XPathNode::Element(idx) if *idx < index.tag_count() => Some(format!("ELEMENT:{}", index.tag_name(*idx))),
+        XPathNode::Element(idx) if *idx < index.tag_count() => {
+            match index.tag_types[*idx] {
+                TagType::Comment => Some("COMMENT".to_string()),
+                TagType::PI | TagType::CData => None, // skip — test parser also ignores these
+                _ => Some(format!("ELEMENT:{}", index.tag_name(*idx))),
+            }
+        }
         XPathNode::Text(_) => Some("TEXT".to_string()),
         _ => None,
     }).collect()
@@ -145,7 +162,16 @@ fn run_expression_tests(test_name: &str) -> (usize, usize, Vec<String>) {
                             simdxml::xpath::StandaloneResult::Number(n) => {
                                 let matches = if expected_num.is_nan() && n.is_nan() { true }
                                     else if expected_num.is_infinite() && n.is_infinite() { expected_num.signum() == n.signum() }
-                                    else { (n - expected_num).abs() < 1e-10 || format!("{}", n) == format!("{}", expected_num) };
+                                    else {
+                                        // Absolute tolerance for small numbers, relative for large.
+                                        // Expected values went through libxml2's %g format (6 sig digits)
+                                        // then back through f64 parse, losing precision for huge numbers.
+                                        let abs_diff = (n - expected_num).abs();
+                                        let max_abs = expected_num.abs().max(n.abs());
+                                        let rel_tol = max_abs * 1e-4; // 0.01% relative tolerance
+                                        abs_diff < 1e-10 || (max_abs > 1e15 && abs_diff < rel_tol)
+                                            || format!("{}", n) == format!("{}", expected_num)
+                                    };
                                 if matches { passed += 1; }
                                 else { failures.push(format!("MISMATCH: {} expected {} got {}", expr, expected_num, n)); }
                             }
@@ -186,6 +212,8 @@ fn test_libxml2_conformance_full() {
         ("chapters", "chaptersbase"), ("chapters", "chaptersprefol"),
         ("str", "strbase"), ("nodes", "nodespat"), ("mixed", "mixedpat"),
         ("vid", "vidbase"), ("unicode", "unicodesimple"),
+        ("id", "idsimple"), ("lang", "langsimple"), ("ns", "nssimple"),
+        ("usr1", "usr1check"),
     ];
     let expr_tests = vec!["base", "compare", "equality", "floats", "functions", "strings"];
 
