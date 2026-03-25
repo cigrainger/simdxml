@@ -106,15 +106,66 @@ pub fn load_or_parse(xml_path: impl AsRef<std::path::Path>) -> Result<OwnedXmlIn
 // Convenience methods on XmlIndex
 impl<'a> XmlIndex<'a> {
     /// Evaluate an XPath expression and return text content of matches.
+    ///
+    /// For relative paths (e.g., `s`, `chapter/para`), evaluation starts from
+    /// the document element, matching libxml2 behavior.
     pub fn xpath_text(&'a self, xpath_expr: &str) -> Result<Vec<&'a str>> {
         let expr = xpath::parse_xpath(xpath_expr)?;
-        xpath::eval_text(self, &expr)
+        let nodes = self.eval_with_doc_context(&expr)?;
+        xpath::extract_text(self, &nodes)
     }
 
     /// Evaluate an XPath expression and return matching nodes.
+    ///
+    /// For relative paths (e.g., `s`, `chapter/para`), evaluation starts from
+    /// the document element, matching libxml2 behavior.
     pub fn xpath(&self, xpath_expr: &str) -> Result<Vec<xpath::XPathNode>> {
         let expr = xpath::parse_xpath(xpath_expr)?;
-        xpath::evaluate(self, &expr)
+        self.eval_with_doc_context(&expr)
+    }
+
+    /// Evaluate an expression, using document element as context for relative paths.
+    /// Handles unions containing relative paths correctly.
+    fn eval_with_doc_context(&self, expr: &xpath::XPathExpr) -> Result<Vec<xpath::XPathNode>> {
+        match expr {
+            xpath::XPathExpr::LocationPath(ref path) if !path.absolute => {
+                if let Some(doc_elem) = self.document_element() {
+                    return xpath::evaluate_from_context(
+                        self, expr, xpath::XPathNode::Element(doc_elem));
+                }
+                xpath::evaluate(self, expr)
+            }
+            xpath::XPathExpr::Union(ref exprs) => {
+                // Evaluate each union branch with doc context
+                let mut result = Vec::new();
+                for e in exprs {
+                    result.extend(self.eval_with_doc_context(e)?);
+                }
+                // Dedup and sort in document order
+                result.sort_by_key(|n| match n {
+                    xpath::XPathNode::Element(i) => (*i, 0u32),
+                    xpath::XPathNode::Text(i) => (*i, 1),
+                    xpath::XPathNode::Attribute(i, _) => (*i, 2),
+                    xpath::XPathNode::Namespace(i, _) => (*i, 3),
+                });
+                result.dedup_by(|a, b| match (a, b) {
+                    (xpath::XPathNode::Element(i), xpath::XPathNode::Element(j)) => i == j,
+                    (xpath::XPathNode::Text(i), xpath::XPathNode::Text(j)) => i == j,
+                    _ => false,
+                });
+                Ok(result)
+            }
+            _ => xpath::evaluate(self, expr),
+        }
+    }
+
+    /// Find the document element (first depth-0 Open/SelfClose tag).
+    fn document_element(&self) -> Option<usize> {
+        (0..self.tag_count()).find(|&i| {
+            self.depths[i] == 0
+                && (self.tag_types[i] == index::TagType::Open
+                    || self.tag_types[i] == index::TagType::SelfClose)
+        })
     }
 
     /// Evaluate a predicate expression (string, number, boolean) in document context.

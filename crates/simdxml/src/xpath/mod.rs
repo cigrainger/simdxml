@@ -5,7 +5,7 @@ pub mod parser;
 pub mod simd_pred;
 
 pub use ast::XPathExpr;
-pub use eval::{evaluate, evaluate_from_context, eval_text, eval_standalone_expr, eval_expr_with_doc, eval_expr_with_context, StandaloneResult, XPathNode};
+pub use eval::{evaluate, evaluate_from_context, eval_text, extract_text, eval_standalone_expr, eval_expr_with_doc, eval_expr_with_context, StandaloneResult, XPathNode};
 pub use parser::{parse_xpath, parse_xpath_predicate_expr};
 
 use crate::error::Result;

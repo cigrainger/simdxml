@@ -206,6 +206,40 @@ pub fn eval_text<'a>(
     Ok(results)
 }
 
+/// Extract text from pre-evaluated nodes.
+pub fn extract_text<'a>(index: &'a XmlIndex<'a>, nodes: &[XPathNode]) -> Result<Vec<&'a str>> {
+    let mut results = Vec::with_capacity(nodes.len());
+    for &node in nodes {
+        match node {
+            XPathNode::Element(idx) => {
+                let text_slice = index.child_text_slice(idx);
+                if !text_slice.is_empty() {
+                    for &ti in text_slice {
+                        let text = index.text_content(&index.text_ranges[ti as usize]);
+                        if !text.is_empty() {
+                            results.push(text);
+                        }
+                    }
+                } else {
+                    for range in &index.text_ranges {
+                        if range.parent_tag == idx as u32 {
+                            let text = index.text_content(range);
+                            if !text.is_empty() {
+                                results.push(text);
+                            }
+                        }
+                    }
+                }
+            }
+            XPathNode::Text(idx) => {
+                results.push(index.text_content(&index.text_ranges[idx]));
+            }
+            _ => {}
+        }
+    }
+    Ok(results)
+}
+
 /// Sentinel index for the virtual document root.
 const DOC_ROOT: usize = usize::MAX;
 
@@ -230,6 +264,7 @@ fn eval_id_function(index: &XmlIndex, args: &[XPathExpr]) -> Result<Vec<XPathNod
     Ok(vec![])
 }
 
+/// Evaluate a relative location path starting from the document element.
 fn eval_location_path<'a>(
     index: &'a XmlIndex<'a>,
     path: &LocationPath,
@@ -237,9 +272,6 @@ fn eval_location_path<'a>(
     let mut context: Vec<XPathNode> = if path.absolute {
         vec![XPathNode::Element(DOC_ROOT)]
     } else {
-        // XPath 1.0 §2: initial context node is the root of the document tree.
-        // For relative paths at the top level, start from the document root node,
-        // not the document element. child::x from doc root finds the document element.
         vec![XPathNode::Element(DOC_ROOT)]
     };
 
