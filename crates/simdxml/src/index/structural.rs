@@ -21,8 +21,6 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
         text_child_offsets: Vec::new(),
         text_child_data: Vec::new(),
         close_map: Vec::new(),
-        attr_offsets: Vec::new(),
-        attr_data: Vec::new(),
     };
 
     let mut pos = 0;

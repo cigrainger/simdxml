@@ -40,6 +40,64 @@ impl<'a> XmlIndex<'a> {
         None
     }
 
+    /// Get all attribute names on a tag. Zero-allocation scan of raw bytes.
+    pub fn get_all_attribute_names(&self, tag_idx: usize) -> Vec<&'a str> {
+        let start = self.tag_starts[tag_idx] as usize;
+        let end = self.tag_ends[tag_idx] as usize;
+        let tag_bytes = &self.input[start..=end];
+        let mut result = Vec::new();
+
+        // Skip past tag name
+        let mut pos = 1; // skip '<'
+        while pos < tag_bytes.len()
+            && tag_bytes[pos] != b'>'
+            && tag_bytes[pos] != b'/'
+            && !tag_bytes[pos].is_ascii_whitespace()
+        {
+            pos += 1;
+        }
+
+        // Scan for name=value patterns
+        while pos < tag_bytes.len() && tag_bytes[pos] != b'>' {
+            if tag_bytes[pos] == b'/' { break; }
+            if tag_bytes[pos].is_ascii_whitespace() { pos += 1; continue; }
+
+            let attr_name_start = pos;
+            while pos < tag_bytes.len()
+                && tag_bytes[pos] != b'='
+                && tag_bytes[pos] != b'>'
+                && !tag_bytes[pos].is_ascii_whitespace()
+            {
+                pos += 1;
+            }
+            let attr_name_end = pos;
+            if pos < tag_bytes.len() && tag_bytes[pos] == b'=' {
+                pos += 1;
+                if pos < tag_bytes.len() && (tag_bytes[pos] == b'"' || tag_bytes[pos] == b'\'') {
+                    let quote = tag_bytes[pos];
+                    pos += 1;
+                    if let Some(off) = memchr::memchr(quote, &tag_bytes[pos..]) {
+                        pos += off + 1;
+                    }
+                    if attr_name_end > attr_name_start {
+                        let abs_start = start + attr_name_start;
+                        let abs_end = start + attr_name_end;
+                        if let Ok(name) = std::str::from_utf8(&self.input[abs_start..abs_end]) {
+                            if !name.starts_with("xmlns") {
+                                result.push(name);
+                            }
+                        }
+                    }
+                } else {
+                    pos += 1;
+                }
+            } else {
+                pos += 1;
+            }
+        }
+        result
+    }
+
     /// Extract namespace declarations (xmlns:prefix="uri") from a tag.
     /// Returns Vec<(prefix, uri)>. Does not include inherited namespaces.
     pub fn get_namespace_decls(&self, tag_idx: usize) -> Vec<(&'a str, &'a str)> {

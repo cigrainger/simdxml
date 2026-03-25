@@ -7,3 +7,4 @@ duckdb_unittest_tempdir
 venv
 .claude
 .DS_Store
+testdata/bench/

@@ -2,9 +2,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0},
-    combinator::opt,
-    multi::separated_list1,
-    sequence::{delimited, pair, preceded, tuple},
+    sequence::{delimited, pair, preceded},
     IResult,
 };
 
@@ -56,7 +54,7 @@ fn function_path_expr(input: &str) -> IResult<&str, XPathExpr> {
         if preds.is_empty() {
             Ok((input, func))
         } else {
-            Ok((input, func)) // TODO: apply predicates to function result
+            Ok((input, XPathExpr::GlobalFilter(Box::new(func), preds)))
         }
     }
 }

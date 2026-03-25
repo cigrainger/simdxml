@@ -48,19 +48,6 @@ pub struct XmlIndex<'a> {
     /// Matching close tag for each open tag. u32::MAX = no match.
     pub(crate) close_map: Vec<u32>,
 
-    /// CSR attribute index: attr_offsets[i]..attr_offsets[i+1] into attr_data.
-    pub(crate) attr_offsets: Vec<u32>,
-    /// Flat array of (name_offset, name_len, value_offset, value_len) tuples.
-    pub(crate) attr_data: Vec<AttrEntry>,
-}
-
-/// A single attribute: byte ranges into the original input.
-#[derive(Debug, Clone, Copy)]
-pub struct AttrEntry {
-    pub name_start: u32,
-    pub name_len: u16,
-    pub value_start: u32,
-    pub value_len: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +213,46 @@ impl<'a> XmlIndex<'a> {
         std::str::from_utf8(bytes).unwrap_or("")
     }
 
+    /// Decode XML entities in a string. Returns borrowed if no entities present.
+    pub fn decode_entities(s: &str) -> std::borrow::Cow<'_, str> {
+        if !s.contains('&') {
+            return std::borrow::Cow::Borrowed(s);
+        }
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '&' {
+                let mut entity = String::new();
+                for ec in chars.by_ref() {
+                    if ec == ';' { break; }
+                    entity.push(ec);
+                }
+                match entity.as_str() {
+                    "amp" => result.push('&'),
+                    "lt" => result.push('<'),
+                    "gt" => result.push('>'),
+                    "apos" => result.push('\''),
+                    "quot" => result.push('"'),
+                    e if e.starts_with('#') => {
+                        let num = &e[1..];
+                        let code = if let Some(hex) = num.strip_prefix('x') {
+                            u32::from_str_radix(hex, 16).ok()
+                        } else {
+                            num.parse::<u32>().ok()
+                        };
+                        if let Some(ch) = code.and_then(char::from_u32) {
+                            result.push(ch);
+                        }
+                    }
+                    _ => { result.push('&'); result.push_str(&entity); result.push(';'); }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        std::borrow::Cow::Owned(result)
+    }
+
     /// Number of tags in the index.
     pub fn tag_count(&self) -> usize {
         self.tag_starts.len()
@@ -293,24 +320,20 @@ impl<'a> XmlIndex<'a> {
     }
 
     /// Get all text content under a tag (including nested).
+    /// Uses precomputed text ranges instead of byte-by-byte tag stripping.
     pub fn all_text(&self, tag_idx: usize) -> String {
         let close_idx = self.matching_close(tag_idx).unwrap_or(tag_idx);
-        let start = self.tag_ends[tag_idx] as usize + 1;
-        let end = self.tag_starts[close_idx] as usize;
-        if start >= end || start >= self.input.len() {
-            return String::new();
-        }
-        // Strip all tags, keep only text
+        let tag_start = self.tag_starts[tag_idx];
+        let tag_end = if close_idx == tag_idx {
+            self.tag_ends[tag_idx]
+        } else {
+            self.tag_starts[close_idx]
+        };
+
         let mut result = String::new();
-        let slice = &self.input[start..end.min(self.input.len())];
-        let mut in_tag = false;
-        for &b in slice {
-            if b == b'<' {
-                in_tag = true;
-            } else if b == b'>' {
-                in_tag = false;
-            } else if !in_tag {
-                result.push(b as char);
+        for range in &self.text_ranges {
+            if range.start >= tag_start && range.end <= tag_end {
+                result.push_str(self.text_content(range));
             }
         }
         result

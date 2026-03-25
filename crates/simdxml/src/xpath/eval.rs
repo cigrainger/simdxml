@@ -149,6 +149,8 @@ pub fn evaluate<'a>(
 }
 
 /// Extract text results from XPath evaluation.
+/// For element nodes, returns all descendant text (recursive).
+/// For text nodes, returns the text content directly.
 pub fn eval_text<'a>(
     index: &'a XmlIndex<'a>,
     expr: &XPathExpr,
@@ -158,6 +160,8 @@ pub fn eval_text<'a>(
     for node in nodes {
         match node {
             XPathNode::Element(idx) => {
+                // Use direct_text for elements (uses CSR when available).
+                // For recursive text, callers should use all_text() separately.
                 for t in index.direct_text(idx) {
                     if !t.is_empty() {
                         results.push(t);
@@ -375,9 +379,11 @@ fn eval_step<'a>(
     }
 
     // XPath node sets are always unique, in document order.
-    // Deduplicate by node identity, then sort.
-    dedup_nodes(&mut result);
-    sort_doc_order(index, &mut result);
+    // Skip dedup/sort for single-context-node (already unique and ordered).
+    if context.len() > 1 {
+        dedup_nodes(&mut result);
+        sort_doc_order(index, &mut result);
+    }
 
     Ok(result)
 }
@@ -756,8 +762,15 @@ fn eval_function(
             Ok(XPathValue::Number(val.as_number()))
         }
         "sum" => {
-            // sum() takes a node-set, sums string values as numbers
-            Ok(XPathValue::Number(0.0)) // TODO: proper node-set sum
+            if let Some(arg) = args.first() {
+                let nodes = evaluate_in_context(index, node, arg)?;
+                let total: f64 = nodes.iter()
+                    .map(|n| node_string_value(index, *n).parse::<f64>().unwrap_or(0.0))
+                    .sum();
+                Ok(XPathValue::Number(total))
+            } else {
+                Ok(XPathValue::Number(0.0))
+            }
         }
         "translate" => {
             if args.len() >= 3 {
@@ -881,12 +894,21 @@ fn compare_values(left: &XPathValue, op: &BinaryOp, right: &XPathValue) -> bool 
 
 fn node_string_value(index: &XmlIndex, node: XPathNode) -> String {
     match node {
-        XPathNode::Element(idx) if idx != DOC_ROOT => index.all_text(idx),
-        XPathNode::Text(idx) => index.text_content(&index.text_ranges[idx]).to_string(),
-        XPathNode::Attribute(tag_idx, _) => {
-            // The attribute name is stored as the step's node_test
-            // For now, we need to get the last-evaluated attribute name
-            // This is a limitation — we'd need to pass the attr name through
+        XPathNode::Element(idx) if idx != DOC_ROOT => {
+            XmlIndex::decode_entities(&index.all_text(idx)).into_owned()
+        }
+        XPathNode::Text(idx) => {
+            XmlIndex::decode_entities(index.text_content(&index.text_ranges[idx])).into_owned()
+        }
+        XPathNode::Attribute(tag_idx, name_hash) => {
+            // Find the attribute by matching the name hash against all attrs on this tag
+            for attr_name in index.get_all_attribute_names(tag_idx) {
+                if attr_name_hash(attr_name) == name_hash {
+                    if let Some(val) = index.get_attribute(tag_idx, attr_name) {
+                        return val.to_string();
+                    }
+                }
+            }
             String::new()
         }
         _ => String::new(),
@@ -908,7 +930,7 @@ fn evaluate_in_context(
             }
             Ok(context)
         }
-        XPathExpr::LocationPath(path) => {
+        XPathExpr::LocationPath(_) => {
             // Absolute path: evaluate from document root
             evaluate(index, expr)
         }
@@ -919,7 +941,7 @@ fn evaluate_in_context(
 fn matches_node_test(index: &XmlIndex, node: XPathNode, test: &NodeTest) -> bool {
     match (node, test) {
         (_, NodeTest::Node) => true,
-        (_, NodeTest::Wildcard) => matches!(node, XPathNode::Element(_)),
+        (_, NodeTest::Wildcard) => matches!(node, XPathNode::Element(_) | XPathNode::Namespace(_, _)),
         (XPathNode::Text(_), NodeTest::Text) => true,
         (XPathNode::Element(idx), NodeTest::Name(name)) => index.tag_name_eq(idx, name),
         (XPathNode::Element(idx), NodeTest::Comment) => {
@@ -929,7 +951,6 @@ fn matches_node_test(index: &XmlIndex, node: XPathNode, test: &NodeTest) -> bool
         (XPathNode::Attribute(_, _), NodeTest::Name(_)) => true, // already matched in axis
         // Namespace nodes: match by prefix name or wildcard
         (XPathNode::Namespace(_, hash), NodeTest::Name(name)) => hash == attr_name_hash(name),
-        (XPathNode::Namespace(_, _), NodeTest::Wildcard) => true,
         _ => false,
     }
 }
@@ -1111,21 +1132,60 @@ fn eval_ancestor_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -> 
 }
 
 fn eval_following_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
-    let XPathNode::Element(idx) = node else {
-        return vec![];
+    let (idx, parent_tag) = match node {
+        XPathNode::Element(i) => (i, index.parents[i]),
+        XPathNode::Text(i) => {
+            let p = index.text_ranges[i].parent_tag;
+            // Return sibling tags and text nodes after this text node
+            let mut result = Vec::new();
+            let my_pos = index.text_ranges[i].start;
+            if p != u32::MAX {
+                let parent_idx = p as usize;
+                // Sibling tags
+                for &child in index.child_tag_slice(parent_idx) {
+                    if index.tag_starts[child as usize] > my_pos {
+                        result.push(XPathNode::Element(child as usize));
+                    }
+                }
+                // Sibling text nodes
+                for &ti in index.child_text_slice(parent_idx) {
+                    if index.text_ranges[ti as usize].start > my_pos {
+                        result.push(XPathNode::Text(ti as usize));
+                    }
+                }
+                sort_doc_order(index, &mut result);
+            }
+            return result;
+        }
+        _ => return vec![],
     };
 
-    let parent = index.parents[idx];
-    let depth = index.depths[idx];
     let mut result = Vec::new();
-
-    for i in (idx + 1)..index.tag_count() {
-        if index.parents[i] == parent
-            && index.depths[i] == depth
-            && (index.tag_types[i] == TagType::Open
-                || index.tag_types[i] == TagType::SelfClose)
-        {
-            result.push(XPathNode::Element(i));
+    // Use CSR if available for element siblings
+    if index.has_indices() && parent_tag != u32::MAX {
+        let parent_idx = parent_tag as usize;
+        for &child in index.child_tag_slice(parent_idx) {
+            if (child as usize) > idx {
+                result.push(XPathNode::Element(child as usize));
+            }
+        }
+        // Include sibling text nodes
+        let my_pos = index.tag_starts[idx];
+        for &ti in index.child_text_slice(parent_idx) {
+            if index.text_ranges[ti as usize].start > my_pos {
+                result.push(XPathNode::Text(ti as usize));
+            }
+        }
+        sort_doc_order(index, &mut result);
+    } else {
+        let depth = index.depths[idx];
+        for i in (idx + 1)..index.tag_count() {
+            if index.parents[i] == parent_tag
+                && index.depths[i] == depth
+                && is_node_tag(index.tag_types[i])
+            {
+                result.push(XPathNode::Element(i));
+            }
         }
     }
 
@@ -1133,21 +1193,55 @@ fn eval_following_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNo
 }
 
 fn eval_preceding_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
-    let XPathNode::Element(idx) = node else {
-        return vec![];
+    let (idx, parent_tag) = match node {
+        XPathNode::Element(i) => (i, index.parents[i]),
+        XPathNode::Text(i) => {
+            let p = index.text_ranges[i].parent_tag;
+            let mut result = Vec::new();
+            let my_pos = index.text_ranges[i].start;
+            if p != u32::MAX {
+                let parent_idx = p as usize;
+                for &child in index.child_tag_slice(parent_idx) {
+                    if index.tag_starts[child as usize] < my_pos {
+                        result.push(XPathNode::Element(child as usize));
+                    }
+                }
+                for &ti in index.child_text_slice(parent_idx) {
+                    if index.text_ranges[ti as usize].start < my_pos {
+                        result.push(XPathNode::Text(ti as usize));
+                    }
+                }
+                sort_doc_order(index, &mut result);
+            }
+            return result;
+        }
+        _ => return vec![],
     };
 
-    let parent = index.parents[idx];
-    let depth = index.depths[idx];
     let mut result = Vec::new();
-
-    for i in (0..idx).rev() {
-        if index.parents[i] == parent
-            && index.depths[i] == depth
-            && (index.tag_types[i] == TagType::Open
-                || index.tag_types[i] == TagType::SelfClose)
-        {
-            result.push(XPathNode::Element(i));
+    if index.has_indices() && parent_tag != u32::MAX {
+        let parent_idx = parent_tag as usize;
+        for &child in index.child_tag_slice(parent_idx) {
+            if (child as usize) < idx {
+                result.push(XPathNode::Element(child as usize));
+            }
+        }
+        let my_pos = index.tag_starts[idx];
+        for &ti in index.child_text_slice(parent_idx) {
+            if index.text_ranges[ti as usize].start < my_pos {
+                result.push(XPathNode::Text(ti as usize));
+            }
+        }
+        sort_doc_order(index, &mut result);
+    } else {
+        let depth = index.depths[idx];
+        for i in (0..idx).rev() {
+            if index.parents[i] == parent_tag
+                && index.depths[i] == depth
+                && is_node_tag(index.tag_types[i])
+            {
+                result.push(XPathNode::Element(i));
+            }
         }
     }
 
@@ -1223,14 +1317,16 @@ fn eval_attribute_axis(
     match test {
         NodeTest::Name(name) => {
             if index.get_attribute(idx, name).is_some() {
-                vec![XPathNode::Attribute(idx, 0)]
+                vec![XPathNode::Attribute(idx, attr_name_hash(name))]
             } else {
                 vec![]
             }
         }
-        NodeTest::Wildcard => {
-            // TODO: return all attributes
-            vec![]
+        NodeTest::Wildcard | NodeTest::Node => {
+            // Return all attributes
+            index.get_all_attribute_names(idx).iter()
+                .map(|name| XPathNode::Attribute(idx, attr_name_hash(name)))
+                .collect()
         }
         _ => vec![],
     }
