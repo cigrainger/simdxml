@@ -47,6 +47,7 @@ pub struct XmlIndex<'a> {
 
     /// Matching close tag for each open tag. u32::MAX = no match.
     pub(crate) close_map: Vec<u32>,
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +180,15 @@ impl<'a> XmlIndex<'a> {
         let start = self.text_child_offsets[parent_idx] as usize;
         let end = self.text_child_offsets[parent_idx + 1] as usize;
         &self.text_child_data[start..end]
+    }
+
+    /// Fast tag name comparison (avoids UTF-8 validation on the hot path).
+    #[inline]
+    pub fn tag_name_eq(&self, tag_idx: usize, name: &str) -> bool {
+        let (off, len) = self.tag_names[tag_idx];
+        let name_bytes = name.as_bytes();
+        if name_bytes.len() != len as usize { return false; }
+        &self.input[off as usize..off as usize + len as usize] == name_bytes
     }
 
     /// Get the tag name as a string slice.

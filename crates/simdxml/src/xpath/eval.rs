@@ -154,27 +154,23 @@ pub fn eval_text<'a>(
     expr: &XPathExpr,
 ) -> Result<Vec<&'a str>> {
     let nodes = evaluate(index, expr)?;
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(nodes.len());
     for node in nodes {
         match node {
             XPathNode::Element(idx) => {
-                // For elements, return all text content
-                let text = index.all_text(idx);
-                if !text.is_empty() {
-                    // We need to return owned strings for all_text, but &str for direct text
-                    // For now, use direct text
-                    for t in index.direct_text(idx) {
-                        results.push(t);
+                // Use precomputed child text index — O(children) not O(N)
+                let text_children = index.child_text_slice(idx);
+                for &ti in text_children {
+                    let text = index.text_content(&index.text_ranges[ti as usize]);
+                    if !text.is_empty() {
+                        results.push(text);
                     }
                 }
             }
             XPathNode::Text(idx) => {
                 results.push(index.text_content(&index.text_ranges[idx]));
             }
-            XPathNode::Attribute(tag_idx, _) => {
-                // Placeholder — attribute value extraction
-            }
-            XPathNode::Namespace(_, _) => {}
+            _ => {}
         }
     }
     Ok(results)
@@ -265,11 +261,11 @@ fn eval_fused_descendant_child(
 
         match &child_step.node_test {
             NodeTest::Name(name) => {
-                // Fast path: scan for elements by name
+                // Single scan with fast byte comparison (no UTF-8 validation)
                 for j in scan_start..scan_end {
                     let tt = index.tag_types[j];
                     if (tt == TagType::Open || tt == TagType::SelfClose)
-                        && index.tag_name(j) == name.as_str()
+                        && index.tag_name_eq(j, name)
                     {
                         matched.push(XPathNode::Element(j));
                     }
@@ -928,7 +924,7 @@ fn matches_node_test(index: &XmlIndex, node: XPathNode, test: &NodeTest) -> bool
         (_, NodeTest::Node) => true,
         (_, NodeTest::Wildcard) => matches!(node, XPathNode::Element(_)),
         (XPathNode::Text(_), NodeTest::Text) => true,
-        (XPathNode::Element(idx), NodeTest::Name(name)) => index.tag_name(idx) == name,
+        (XPathNode::Element(idx), NodeTest::Name(name)) => index.tag_name_eq(idx, name),
         (XPathNode::Element(idx), NodeTest::Comment) => {
             index.tag_types[idx] == TagType::Comment
         }
