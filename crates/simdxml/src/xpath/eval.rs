@@ -431,6 +431,90 @@ fn eval_function(
                 Ok(XPathValue::String(String::new()))
             }
         }
+        "floor" => {
+            let n = if let Some(arg) = args.first() {
+                eval_predicate_value(index, node, arg, position, size)?.as_number()
+            } else { 0.0 };
+            Ok(XPathValue::Number(n.floor()))
+        }
+        "ceiling" => {
+            let n = if let Some(arg) = args.first() {
+                eval_predicate_value(index, node, arg, position, size)?.as_number()
+            } else { 0.0 };
+            Ok(XPathValue::Number(n.ceil()))
+        }
+        "round" => {
+            let n = if let Some(arg) = args.first() {
+                eval_predicate_value(index, node, arg, position, size)?.as_number()
+            } else { 0.0 };
+            // XPath round: round half to positive infinity
+            Ok(XPathValue::Number(if n.fract() == -0.5 { n.ceil() } else { n.round() }))
+        }
+        "number" => {
+            let val = if let Some(arg) = args.first() {
+                eval_predicate_value(index, node, arg, position, size)?
+            } else {
+                XPathValue::String(node_string_value(index, node))
+            };
+            Ok(XPathValue::Number(val.as_number()))
+        }
+        "sum" => {
+            // sum() takes a node-set, sums string values as numbers
+            Ok(XPathValue::Number(0.0)) // TODO: proper node-set sum
+        }
+        "translate" => {
+            if args.len() >= 3 {
+                let s = eval_predicate_value(index, node, &args[0], position, size)?.as_string();
+                let from = eval_predicate_value(index, node, &args[1], position, size)?.as_string();
+                let to = eval_predicate_value(index, node, &args[2], position, size)?.as_string();
+                let from_chars: Vec<char> = from.chars().collect();
+                let to_chars: Vec<char> = to.chars().collect();
+                let result: String = s.chars().filter_map(|c| {
+                    if let Some(pos) = from_chars.iter().position(|&fc| fc == c) {
+                        to_chars.get(pos).copied() // replace or remove
+                    } else {
+                        Some(c)
+                    }
+                }).collect();
+                Ok(XPathValue::String(result))
+            } else {
+                Ok(XPathValue::String(String::new()))
+            }
+        }
+        "substring-before" => {
+            if args.len() >= 2 {
+                let s = eval_predicate_value(index, node, &args[0], position, size)?.as_string();
+                let needle = eval_predicate_value(index, node, &args[1], position, size)?.as_string();
+                if let Some(pos) = s.find(&needle) {
+                    Ok(XPathValue::String(s[..pos].to_string()))
+                } else {
+                    Ok(XPathValue::String(String::new()))
+                }
+            } else {
+                Ok(XPathValue::String(String::new()))
+            }
+        }
+        "substring-after" => {
+            if args.len() >= 2 {
+                let s = eval_predicate_value(index, node, &args[0], position, size)?.as_string();
+                let needle = eval_predicate_value(index, node, &args[1], position, size)?.as_string();
+                if let Some(pos) = s.find(&needle) {
+                    Ok(XPathValue::String(s[pos + needle.len()..].to_string()))
+                } else {
+                    Ok(XPathValue::String(String::new()))
+                }
+            } else {
+                Ok(XPathValue::String(String::new()))
+            }
+        }
+        "boolean" => {
+            let val = if let Some(arg) = args.first() {
+                eval_predicate_value(index, node, arg, position, size)?
+            } else {
+                XPathValue::Boolean(false)
+            };
+            Ok(XPathValue::Boolean(val.is_truthy()))
+        }
         _ => Ok(XPathValue::String(String::new())),
     }
 }

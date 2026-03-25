@@ -370,11 +370,21 @@ fn comparison_op(input: &str) -> IResult<&str, BinaryOp> {
 fn primary_expr(input: &str) -> IResult<&str, XPathExpr> {
     let (input, _) = multispace0(input)?;
     alt((
+        parenthesized_pred_expr,
         function_call_expr,
         string_literal_expr,
         number_literal_expr,
         nested_path_expr,
     ))(input)
+}
+
+fn parenthesized_pred_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, _) = char('(')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, expr) = predicate_expr(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(')')(input)?;
+    Ok((input, expr))
 }
 
 fn function_call_expr(input: &str) -> IResult<&str, XPathExpr> {
@@ -427,10 +437,26 @@ fn double_quoted_string(input: &str) -> IResult<&str, XPathExpr> {
 }
 
 fn number_literal_expr(input: &str) -> IResult<&str, XPathExpr> {
-    let (input, num_str) = take_while1(|c: char| c.is_ascii_digit() || c == '.')(input)?;
-    let num: f64 = num_str
-        .parse()
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Float)))?;
+    // Handle negative numbers
+    let (input, neg) = opt(char('-'))(input)?;
+
+    let (input, num_str) = take_while1(|c: char| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')(input)?;
+
+    // Don't consume if it looks like a name (e.g., "div")
+    if num_str.chars().next().map_or(true, |c| !c.is_ascii_digit() && c != '.') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Float,
+        )));
+    }
+
+    let full = if neg.is_some() {
+        format!("-{}", num_str)
+    } else {
+        num_str.to_string()
+    };
+
+    let num: f64 = full.parse().unwrap_or(f64::NAN);
     Ok((input, XPathExpr::NumberLiteral(num)))
 }
 
