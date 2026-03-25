@@ -77,6 +77,11 @@ impl<'a> XmlIndex<'a> {
         xpath::eval_expr_with_doc(self, expr_str)
     }
 
+    /// Evaluate a predicate expression from a specific element context.
+    pub fn eval_expr_from(&self, expr_str: &str, context_idx: usize) -> Result<xpath::StandaloneResult> {
+        xpath::eval_expr_with_context(self, expr_str, xpath::XPathNode::Element(context_idx))
+    }
+
     /// Evaluate a relative XPath from a specific element context node.
     pub fn xpath_from(&self, xpath_expr: &str, context_idx: usize) -> Result<Vec<xpath::XPathNode>> {
         let expr = xpath::parse_xpath(xpath_expr)?;

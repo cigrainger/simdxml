@@ -80,11 +80,15 @@ fn attr_name_hash(name: &str) -> u64 {
     h
 }
 
-/// Evaluate a predicate expression against a real document.
+/// Evaluate a predicate expression against a real document (from DOC_ROOT).
 pub fn eval_expr_with_doc(index: &XmlIndex, expr_str: &str) -> Result<StandaloneResult> {
+    eval_expr_with_context(index, expr_str, XPathNode::Element(DOC_ROOT))
+}
+
+/// Evaluate a predicate expression from a specific context node.
+pub fn eval_expr_with_context(index: &XmlIndex, expr_str: &str, context: XPathNode) -> Result<StandaloneResult> {
     let parsed = parse_xpath_predicate_expr(expr_str)?;
-    let node = XPathNode::Element(DOC_ROOT);
-    let value = eval_predicate_value(index, node, &parsed, 1, 1)?;
+    let value = eval_predicate_value(index, context, &parsed, 1, 1)?;
     Ok(match value {
         XPathValue::Number(n) => StandaloneResult::Number(n),
         XPathValue::String(s) => StandaloneResult::String(s),
@@ -708,6 +712,50 @@ fn eval_predicate_value(
             Ok(XPathValue::Number(-val.as_number()))
         }
         XPathExpr::BinaryOp(left, op, right) => {
+            // For comparison operators with LocationPath operands, implement
+            // XPath 1.0 §3.4 node-set comparison semantics.
+            let is_comparison = matches!(op, BinaryOp::Eq | BinaryOp::Neq
+                | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Lte | BinaryOp::Gte);
+            let left_is_path = matches!(left.as_ref(), XPathExpr::LocationPath(_));
+            let right_is_path = matches!(right.as_ref(), XPathExpr::LocationPath(_));
+
+            if is_comparison && (left_is_path || right_is_path) {
+                // Node-set comparison: if either side is a node-set,
+                // compare each member. "nodeset = value" is true if ANY member matches.
+                let left_nodes = if left_is_path {
+                    evaluate_in_context(index, node, left)?
+                } else {
+                    vec![]
+                };
+                let right_nodes = if right_is_path {
+                    evaluate_in_context(index, node, right)?
+                } else {
+                    vec![]
+                };
+
+                let result = if left_is_path && right_is_path {
+                    // Both are node-sets: true if any pair of string values matches
+                    let left_vals: Vec<String> = left_nodes.iter().map(|n| node_string_value(index, *n)).collect();
+                    let right_vals: Vec<String> = right_nodes.iter().map(|n| node_string_value(index, *n)).collect();
+                    left_vals.iter().any(|lv| right_vals.iter().any(|rv| {
+                        compare_values(&XPathValue::String(lv.clone()), op, &XPathValue::String(rv.clone()))
+                    }))
+                } else if left_is_path {
+                    let r = eval_predicate_value(index, node, right, position, size)?;
+                    left_nodes.iter().any(|n| {
+                        let lv = XPathValue::String(node_string_value(index, *n));
+                        compare_values(&lv, op, &r)
+                    })
+                } else {
+                    let l = eval_predicate_value(index, node, left, position, size)?;
+                    right_nodes.iter().any(|n| {
+                        let rv = XPathValue::String(node_string_value(index, *n));
+                        compare_values(&l, op, &rv)
+                    })
+                };
+                return Ok(XPathValue::Boolean(result));
+            }
+
             let l = eval_predicate_value(index, node, left, position, size)?;
             let r = eval_predicate_value(index, node, right, position, size)?;
             let ln = l.as_number();
@@ -719,7 +767,6 @@ fn eval_predicate_value(
                 BinaryOp::Div => ln / rn,
                 BinaryOp::Mod => ln % rn,
                 _ => {
-                    // Comparison operators return boolean
                     return Ok(XPathValue::Boolean(compare_values(&l, op, &r)));
                 }
             };

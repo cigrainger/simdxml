@@ -111,7 +111,7 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
                         if ctx == "null" {
                             eval_standalone_expr(&xpath_clone)
                         } else {
-                            index.eval_expr(&xpath_clone)
+                            if ctx == "first_child" { index.eval_expr_from(&xpath_clone, root_elem_idx) } else { index.eval_expr(&xpath_clone) }
                         }
                     }));
                     let expr_result = match expr_result {
@@ -147,7 +147,7 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
                         if ctx == "null" {
                             eval_standalone_expr(&xpath_clone)
                         } else {
-                            index.eval_expr(&xpath_clone)
+                            if ctx == "first_child" { index.eval_expr_from(&xpath_clone, root_elem_idx) } else { index.eval_expr(&xpath_clone) }
                         }
                     }));
                     let expr_result = match expr_result {
@@ -176,7 +176,7 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
                         if ctx == "null" {
                             eval_standalone_expr(&xpath_clone)
                         } else {
-                            index.eval_expr(&xpath_clone)
+                            if ctx == "first_child" { index.eval_expr_from(&xpath_clone, root_elem_idx) } else { index.eval_expr(&xpath_clone) }
                         }
                     }));
                     let expr_result = match expr_result {
