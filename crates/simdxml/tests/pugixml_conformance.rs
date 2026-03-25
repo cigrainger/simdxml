@@ -104,11 +104,15 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
                 }
 
                 "number" | "number_nan" => {
-                    if ctx != "null" && ctx != "doc" { continue; }
+                    if ctx != "null" && ctx != "doc" && ctx != "first_child" { continue; }
                     total += 1;
                     let xpath_clone = assertion.xpath.clone();
                     let expr_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        eval_standalone_expr(&xpath_clone)
+                        if ctx == "null" {
+                            eval_standalone_expr(&xpath_clone)
+                        } else {
+                            index.eval_expr(&xpath_clone)
+                        }
                     }));
                     let expr_result = match expr_result {
                         Ok(r) => r,
@@ -136,11 +140,15 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
                 }
 
                 "boolean" => {
-                    if ctx != "null" && ctx != "doc" { continue; }
+                    if ctx != "null" && ctx != "doc" && ctx != "first_child" { continue; }
                     total += 1;
                     let xpath_clone = assertion.xpath.clone();
                     let expr_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        eval_standalone_expr(&xpath_clone)
+                        if ctx == "null" {
+                            eval_standalone_expr(&xpath_clone)
+                        } else {
+                            index.eval_expr(&xpath_clone)
+                        }
                     }));
                     let expr_result = match expr_result {
                         Ok(r) => r,
@@ -161,11 +169,15 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
                 }
 
                 "string" => {
-                    if ctx != "null" && ctx != "doc" { continue; }
+                    if ctx != "null" && ctx != "doc" && ctx != "first_child" { continue; }
                     total += 1;
                     let xpath_clone = assertion.xpath.clone();
                     let expr_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        eval_standalone_expr(&xpath_clone)
+                        if ctx == "null" {
+                            eval_standalone_expr(&xpath_clone)
+                        } else {
+                            index.eval_expr(&xpath_clone)
+                        }
                     }));
                     let expr_result = match expr_result {
                         Ok(r) => r,

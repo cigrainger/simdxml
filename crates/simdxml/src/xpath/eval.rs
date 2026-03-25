@@ -80,6 +80,18 @@ fn attr_name_hash(name: &str) -> u64 {
     h
 }
 
+/// Evaluate a predicate expression against a real document.
+pub fn eval_expr_with_doc(index: &XmlIndex, expr_str: &str) -> Result<StandaloneResult> {
+    let parsed = parse_xpath_predicate_expr(expr_str)?;
+    let node = XPathNode::Element(DOC_ROOT);
+    let value = eval_predicate_value(index, node, &parsed, 1, 1)?;
+    Ok(match value {
+        XPathValue::Number(n) => StandaloneResult::Number(n),
+        XPathValue::String(s) => StandaloneResult::String(s),
+        XPathValue::Boolean(b) => StandaloneResult::Boolean(b),
+    })
+}
+
 /// Evaluate a standalone expression (no document context needed).
 /// Returns the result as a string representation matching libxml2 format.
 pub fn eval_standalone_expr(expr_str: &str) -> Result<StandaloneResult> {
@@ -560,8 +572,27 @@ fn apply_predicate<'a>(
         XPathExpr::BinaryOp(left, op, right) => {
             let mut result = Vec::new();
             for (i, &node) in nodes.iter().enumerate() {
-                let left_val = eval_predicate_value(index, node, left, i + 1, nodes.len())?;
-                let right_val = eval_predicate_value(index, node, right, i + 1, nodes.len())?;
+                // For or/and with LocationPath operands, evaluate as node-set existence
+                let left_val = if matches!(op, BinaryOp::Or | BinaryOp::And) {
+                    if let XPathExpr::LocationPath(_) = left.as_ref() {
+                        let nodes = evaluate_in_context(index, node, left)?;
+                        XPathValue::Boolean(!nodes.is_empty())
+                    } else {
+                        eval_predicate_value(index, node, left, i + 1, nodes.len())?
+                    }
+                } else {
+                    eval_predicate_value(index, node, left, i + 1, nodes.len())?
+                };
+                let right_val = if matches!(op, BinaryOp::Or | BinaryOp::And) {
+                    if let XPathExpr::LocationPath(_) = right.as_ref() {
+                        let nodes = evaluate_in_context(index, node, right)?;
+                        XPathValue::Boolean(!nodes.is_empty())
+                    } else {
+                        eval_predicate_value(index, node, right, i + 1, nodes.len())?
+                    }
+                } else {
+                    eval_predicate_value(index, node, right, i + 1, nodes.len())?
+                };
                 if compare_values(&left_val, op, &right_val) {
                     result.push(node);
                 }
