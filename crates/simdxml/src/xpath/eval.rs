@@ -204,6 +204,23 @@ fn apply_predicate<'a>(
             }
         }
 
+        // Unary minus in predicate: [-N] means position at negative index = empty
+        XPathExpr::UnaryMinus(inner) => {
+            // Evaluate the inner expression as a number
+            let val = eval_predicate_value(index, nodes[0], inner, 1, nodes.len())?;
+            let n = -(val.as_number());
+            if n.is_nan() || n < 1.0 || n > nodes.len() as f64 {
+                Ok(vec![])
+            } else {
+                let pos = n.round() as usize;
+                if pos >= 1 && pos <= nodes.len() {
+                    Ok(vec![nodes[pos - 1]])
+                } else {
+                    Ok(vec![])
+                }
+            }
+        }
+
         // Comparison: [@attr='value'], [position()=N], etc.
         XPathExpr::BinaryOp(left, op, right) => {
             let mut result = Vec::new();
@@ -572,18 +589,23 @@ fn eval_function(
 fn compare_values(left: &XPathValue, op: &BinaryOp, right: &XPathValue) -> bool {
     match op {
         BinaryOp::Eq => {
-            // XPath equality: NaN != NaN (IEEE 754)
-            let ln = left.as_number();
-            let rn = right.as_number();
-            if ln.is_nan() || rn.is_nan() {
-                // NaN is never equal to anything, even itself
-                // But compare as strings if they're string-typed
-                match (left, right) {
-                    (XPathValue::String(a), XPathValue::String(b)) => a == b,
-                    _ => false,
+            // XPath equality rules (sec 3.4):
+            // If either is boolean, convert other to boolean and compare
+            // If either is number, convert other to number and compare
+            // Otherwise compare as strings
+            match (left, right) {
+                (XPathValue::Boolean(a), _) => *a == right.is_truthy(),
+                (_, XPathValue::Boolean(b)) => left.is_truthy() == *b,
+                _ if matches!(left, XPathValue::Number(_)) || matches!(right, XPathValue::Number(_)) => {
+                    let ln = left.as_number();
+                    let rn = right.as_number();
+                    if ln.is_nan() || rn.is_nan() {
+                        false // NaN != NaN
+                    } else {
+                        ln == rn
+                    }
                 }
-            } else {
-                ln == rn
+                _ => left.as_string() == right.as_string(),
             }
         }
         BinaryOp::Neq => !compare_values(left, &BinaryOp::Eq, right),

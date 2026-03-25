@@ -36,7 +36,26 @@ pub fn parse_xpath(input: &str) -> Result<XPathExpr> {
 }
 
 fn xpath_expr(input: &str) -> IResult<&str, XPathExpr> {
-    alt((parenthesized_filter, union_expr, location_path_expr))(input)
+    alt((parenthesized_filter, function_path_expr, union_expr, location_path_expr))(input)
+}
+
+/// Function call optionally followed by a path: id('x')/p[1]
+fn function_path_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, func) = function_call_expr(input)?;
+    // Check for following path steps (e.g., id('x')/p)
+    if input.starts_with('/') {
+        // TODO: chain function result with path steps
+        // For now, just return the function call
+        Ok((input, func))
+    } else {
+        // Check for predicates: id('x')[1]
+        let (input, preds) = predicates(input)?;
+        if preds.is_empty() {
+            Ok((input, func))
+        } else {
+            Ok((input, func)) // TODO: apply predicates to function result
+        }
+    }
 }
 
 /// Parenthesized filter: (expr)[pred] — evaluate expr, then filter with pred
@@ -493,14 +512,14 @@ fn string_literal_expr(input: &str) -> IResult<&str, XPathExpr> {
 
 fn single_quoted_string(input: &str) -> IResult<&str, XPathExpr> {
     let (input, _) = char('\'')(input)?;
-    let (input, content) = take_while1(|c| c != '\'')(input)?;
+    let (input, content) = nom::bytes::complete::take_while(|c| c != '\'')(input)?;
     let (input, _) = char('\'')(input)?;
     Ok((input, XPathExpr::StringLiteral(content.to_string())))
 }
 
 fn double_quoted_string(input: &str) -> IResult<&str, XPathExpr> {
     let (input, _) = char('"')(input)?;
-    let (input, content) = take_while1(|c| c != '"')(input)?;
+    let (input, content) = nom::bytes::complete::take_while(|c| c != '"')(input)?;
     let (input, _) = char('"')(input)?;
     Ok((input, XPathExpr::StringLiteral(content.to_string())))
 }
