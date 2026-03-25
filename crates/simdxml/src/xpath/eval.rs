@@ -529,12 +529,23 @@ fn eval_function(
 
 fn compare_values(left: &XPathValue, op: &BinaryOp, right: &XPathValue) -> bool {
     match op {
-        BinaryOp::Eq => left.as_string() == right.as_string() || left.as_number() == right.as_number(),
-        BinaryOp::Neq => left.as_string() != right.as_string() && left.as_number() != right.as_number(),
+        BinaryOp::Eq => {
+            // XPath equality: compare as numbers if both are numeric, else as strings
+            let ln = left.as_number();
+            let rn = right.as_number();
+            if !ln.is_nan() && !rn.is_nan() {
+                ln == rn
+            } else {
+                left.as_string() == right.as_string()
+            }
+        }
+        BinaryOp::Neq => !compare_values(left, &BinaryOp::Eq, right),
         BinaryOp::Lt => left.as_number() < right.as_number(),
         BinaryOp::Gt => left.as_number() > right.as_number(),
         BinaryOp::Lte => left.as_number() <= right.as_number(),
         BinaryOp::Gte => left.as_number() >= right.as_number(),
+        BinaryOp::Or => left.is_truthy() || right.is_truthy(),
+        BinaryOp::And => left.is_truthy() && right.is_truthy(),
         _ => false,
     }
 }

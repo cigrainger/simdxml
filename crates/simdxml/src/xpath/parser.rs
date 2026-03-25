@@ -329,60 +329,122 @@ fn predicate(input: &str) -> IResult<&str, XPathExpr> {
     )(input)
 }
 
-/// Expression inside a predicate — supports comparisons, function calls, literals, numbers
+/// XPath 1.0 operator precedence (lowest to highest):
+/// or < and < equality < relational < additive < multiplicative < unary
+
 fn predicate_expr(input: &str) -> IResult<&str, XPathExpr> {
-    alt((comparison_expr, primary_expr))(input)
+    or_expr(input)
 }
 
-fn comparison_expr(input: &str) -> IResult<&str, XPathExpr> {
-    let (input, left) = primary_expr(input)?;
+fn or_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, left) = and_expr(input)?;
     let (input, _) = multispace0(input)?;
-
-    // Try chaining binary operators
-    if let Ok((rest, op)) = comparison_op(input) {
-        let (rest, _) = multispace0(rest)?;
-        let (rest, right) = comparison_expr(rest)?; // Allow chaining
-        Ok((
-            rest,
-            XPathExpr::BinaryOp(Box::new(left), op, Box::new(right)),
-        ))
+    if input.starts_with("or") && input[2..].starts_with(|c: char| c.is_whitespace()) {
+        let (input, _) = tag("or")(input)?;
+        let (input, _) = multispace0(input)?;
+        let (input, right) = or_expr(input)?;
+        Ok((input, XPathExpr::BinaryOp(Box::new(left), BinaryOp::Or, Box::new(right))))
     } else {
         Ok((input, left))
     }
 }
 
-fn comparison_op(input: &str) -> IResult<&str, BinaryOp> {
-    alt((
-        nom::combinator::map(tag("!="), |_| BinaryOp::Neq),
-        nom::combinator::map(tag("<="), |_| BinaryOp::Lte),
-        nom::combinator::map(tag(">="), |_| BinaryOp::Gte),
-        nom::combinator::map(char('='), |_| BinaryOp::Eq),
-        nom::combinator::map(char('<'), |_| BinaryOp::Lt),
-        nom::combinator::map(char('>'), |_| BinaryOp::Gt),
-        nom::combinator::map(tag("div"), |_| BinaryOp::Div),
-        nom::combinator::map(tag("mod"), |_| BinaryOp::Mod),
-        nom::combinator::map(char('+'), |_| BinaryOp::Add),
-        nom::combinator::map(char('-'), |_| BinaryOp::Sub),
-        nom::combinator::map(char('*'), |_| BinaryOp::Mul),
-    ))(input)
+fn and_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, left) = equality_expr(input)?;
+    let (input, _) = multispace0(input)?;
+    if input.starts_with("and") && input[3..].starts_with(|c: char| c.is_whitespace()) {
+        let (input, _) = tag("and")(input)?;
+        let (input, _) = multispace0(input)?;
+        let (input, right) = and_expr(input)?;
+        Ok((input, XPathExpr::BinaryOp(Box::new(left), BinaryOp::And, Box::new(right))))
+    } else {
+        Ok((input, left))
+    }
 }
 
-fn primary_expr(input: &str) -> IResult<&str, XPathExpr> {
+fn equality_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, left) = relational_expr(input)?;
+    let (input, _) = multispace0(input)?;
+    if let Ok((rest, op)) = alt::<_, _, nom::error::Error<&str>, _>((
+        nom::combinator::map(tag("!="), |_| BinaryOp::Neq),
+        nom::combinator::map(char('='), |_| BinaryOp::Eq),
+    ))(input) {
+        let (rest, _) = multispace0(rest)?;
+        let (rest, right) = equality_expr(rest)?;
+        Ok((rest, XPathExpr::BinaryOp(Box::new(left), op, Box::new(right))))
+    } else {
+        Ok((input, left))
+    }
+}
+
+fn relational_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, left) = additive_expr(input)?;
+    let (input, _) = multispace0(input)?;
+    if let Ok((rest, op)) = alt::<_, _, nom::error::Error<&str>, _>((
+        nom::combinator::map(tag("<="), |_| BinaryOp::Lte),
+        nom::combinator::map(tag(">="), |_| BinaryOp::Gte),
+        nom::combinator::map(char('<'), |_| BinaryOp::Lt),
+        nom::combinator::map(char('>'), |_| BinaryOp::Gt),
+    ))(input) {
+        let (rest, _) = multispace0(rest)?;
+        let (rest, right) = relational_expr(rest)?;
+        Ok((rest, XPathExpr::BinaryOp(Box::new(left), op, Box::new(right))))
+    } else {
+        Ok((input, left))
+    }
+}
+
+fn additive_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, left) = multiplicative_expr(input)?;
+    let (input, _) = multispace0(input)?;
+    if let Ok((rest, op)) = alt::<_, _, nom::error::Error<&str>, _>((
+        nom::combinator::map(char('+'), |_| BinaryOp::Add),
+        nom::combinator::map(char('-'), |_| BinaryOp::Sub),
+    ))(input) {
+        let (rest, _) = multispace0(rest)?;
+        let (rest, right) = additive_expr(rest)?;
+        Ok((rest, XPathExpr::BinaryOp(Box::new(left), op, Box::new(right))))
+    } else {
+        Ok((input, left))
+    }
+}
+
+fn multiplicative_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, left) = unary_expr(input)?;
+    let (input, _) = multispace0(input)?;
+    if let Ok((rest, op)) = alt::<_, _, nom::error::Error<&str>, _>((
+        nom::combinator::map(char('*'), |_| BinaryOp::Mul),
+        nom::combinator::map(tag("div"), |_| BinaryOp::Div),
+        nom::combinator::map(tag("mod"), |_| BinaryOp::Mod),
+    ))(input) {
+        let (rest, _) = multispace0(rest)?;
+        let (rest, right) = multiplicative_expr(rest)?;
+        Ok((rest, XPathExpr::BinaryOp(Box::new(left), op, Box::new(right))))
+    } else {
+        Ok((input, left))
+    }
+}
+
+fn unary_expr(input: &str) -> IResult<&str, XPathExpr> {
+    let (input, _) = multispace0(input)?;
+    if input.starts_with('-') {
+        let (input, _) = char('-')(input)?;
+        let (input, expr) = unary_expr(input)?;
+        Ok((input, XPathExpr::UnaryMinus(Box::new(expr))))
+    } else {
+        primary_expr_inner(input)
+    }
+}
+
+fn primary_expr_inner(input: &str) -> IResult<&str, XPathExpr> {
     let (input, _) = multispace0(input)?;
     alt((
-        unary_minus_expr,
         function_call_expr,
         parenthesized_pred_expr,
         string_literal_expr,
         number_literal_expr,
         nested_path_expr,
     ))(input)
-}
-
-fn unary_minus_expr(input: &str) -> IResult<&str, XPathExpr> {
-    let (input, _) = char('-')(input)?;
-    let (input, expr) = primary_expr(input)?;
-    Ok((input, XPathExpr::UnaryMinus(Box::new(expr))))
 }
 
 fn parenthesized_pred_expr(input: &str) -> IResult<&str, XPathExpr> {
