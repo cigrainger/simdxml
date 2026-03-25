@@ -8,6 +8,7 @@ impl<'a> XmlIndex<'a> {
     /// Zero-allocation: searches raw bytes directly with memchr.
     #[inline]
     pub fn get_attribute(&self, tag_idx: usize, attr_name: &str) -> Option<&'a str> {
+        if tag_idx >= self.tag_count() { return None; }
         let start = self.tag_starts[tag_idx] as usize;
         let end = self.tag_ends[tag_idx] as usize;
         let tag_bytes = &self.input[start..=end];
@@ -45,6 +46,7 @@ impl<'a> XmlIndex<'a> {
 
     /// Get all attribute names on a tag. Zero-allocation scan of raw bytes.
     pub fn get_all_attribute_names(&self, tag_idx: usize) -> Vec<&'a str> {
+        if tag_idx >= self.tag_count() { return Vec::new(); }
         let start = self.tag_starts[tag_idx] as usize;
         let end = self.tag_ends[tag_idx] as usize;
         let tag_bytes = &self.input[start..=end];

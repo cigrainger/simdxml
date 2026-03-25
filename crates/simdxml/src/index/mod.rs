@@ -337,6 +337,7 @@ impl<'a> XmlIndex<'a> {
     /// Fast tag name comparison (avoids UTF-8 validation on the hot path).
     #[inline(always)]
     pub fn tag_name_eq(&self, tag_idx: usize, name: &str) -> bool {
+        if tag_idx >= self.tag_names.len() { return false; }
         let (off, len) = self.tag_names[tag_idx];
         let name_bytes = name.as_bytes();
         if name_bytes.len() != len as usize { return false; }

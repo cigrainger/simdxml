@@ -1187,11 +1187,15 @@ fn matches_node_test(index: &XmlIndex, node: XPathNode, test: &NodeTest) -> bool
         (XPathNode::Namespace(_, _), NodeTest::Wildcard) => true,
         (XPathNode::Attribute(_, _), NodeTest::Wildcard) => true,
         (XPathNode::Text(_), NodeTest::Text) => true,
-        (XPathNode::Element(idx), NodeTest::Name(name)) => index.tag_name_eq(idx, name),
-        (XPathNode::Element(idx), NodeTest::Comment) => {
+        (XPathNode::Element(idx), NodeTest::Name(name)) if idx < index.tag_count() => {
+            index.tag_name_eq(idx, name)
+        }
+        (XPathNode::Element(idx), NodeTest::Comment) if idx < index.tag_count() => {
             index.tag_types[idx] == TagType::Comment
         }
-        (XPathNode::Element(idx), NodeTest::PI) => index.tag_types[idx] == TagType::PI,
+        (XPathNode::Element(idx), NodeTest::PI) if idx < index.tag_count() => {
+            index.tag_types[idx] == TagType::PI
+        }
         // Attribute name test: only matches in attribute axis context.
         // This is handled by eval_attribute_axis — if we get here from
         // another axis (self, ancestor-or-self), attributes don't match
@@ -1338,6 +1342,7 @@ fn eval_descendant_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -
 
 fn eval_parent_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
     match node {
+        XPathNode::Element(idx) if idx == DOC_ROOT => vec![],
         XPathNode::Element(idx) => {
             let parent = index.parents[idx];
             if parent != u32::MAX {
@@ -1366,13 +1371,15 @@ fn eval_ancestor_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -> 
     }
 
     let mut current = match node {
-        XPathNode::Element(idx) => index.parents[idx],
+        XPathNode::Element(idx) if idx == DOC_ROOT => u32::MAX,
+        XPathNode::Element(idx) if idx < index.tag_count() => index.parents[idx],
         XPathNode::Text(idx) => index.text_ranges[idx].parent_tag,
-        XPathNode::Attribute(tag_idx, _) => tag_idx as u32, // attribute's parent is its element
-        XPathNode::Namespace(elem_idx, _) => elem_idx as u32, // namespace's parent is its element
+        XPathNode::Attribute(tag_idx, _) if tag_idx < index.tag_count() => tag_idx as u32,
+        XPathNode::Namespace(elem_idx, _) if elem_idx < index.tag_count() => elem_idx as u32,
+        _ => u32::MAX,
     };
 
-    while current != u32::MAX {
+    while current != u32::MAX && (current as usize) < index.tag_count() {
         result.push(XPathNode::Element(current as usize));
         current = index.parents[current as usize];
     }
@@ -1382,6 +1389,7 @@ fn eval_ancestor_axis(index: &XmlIndex, node: XPathNode, include_self: bool) -> 
 
 fn eval_following_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
     let (idx, parent_tag) = match node {
+        XPathNode::Element(i) if i == DOC_ROOT || i >= index.tag_count() => return vec![],
         XPathNode::Element(i) => (i, index.parents[i]),
         XPathNode::Text(i) => {
             let p = index.text_ranges[i].parent_tag;
@@ -1443,6 +1451,7 @@ fn eval_following_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNo
 
 fn eval_preceding_sibling_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
     let (idx, parent_tag) = match node {
+        XPathNode::Element(i) if i == DOC_ROOT || i >= index.tag_count() => return vec![],
         XPathNode::Element(i) => (i, index.parents[i]),
         XPathNode::Text(i) => {
             let p = index.text_ranges[i].parent_tag;
