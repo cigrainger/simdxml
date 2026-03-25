@@ -25,6 +25,7 @@ pub mod batch;
 pub mod bloom;
 pub mod error;
 pub mod index;
+pub mod parallel;
 pub mod persist;
 pub mod simd;
 pub mod xpath;

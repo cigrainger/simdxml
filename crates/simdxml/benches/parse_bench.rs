@@ -670,5 +670,55 @@ criterion_group!(
     bench_bloom,
     bench_batch,
     bench_simd_predicates,
+    bench_parallel,
 );
 criterion_main!(benches);
+
+// ============================================================================
+// Parallel parsing: multi-threaded vs sequential
+// ============================================================================
+
+fn bench_parallel(c: &mut Criterion) {
+    // Use the xlarge patent doc (10MB) — parallel benefits scale with size
+    let data = load("patent_xlarge.xml");
+
+    let mut group = c.benchmark_group("parallel");
+    group.throughput(Throughput::Bytes(data.len() as u64));
+
+    group.bench_function("sequential", |b| {
+        b.iter(|| {
+            let _ = simdxml::parse(&data).unwrap();
+        });
+    });
+
+    for threads in [2, 4, 8] {
+        group.bench_function(format!("parallel_{}t", threads), |b| {
+            b.iter(|| {
+                let _ = simdxml::parallel::parse_parallel(&data, threads).unwrap();
+            });
+        });
+    }
+
+    // Also bench on the large file (1MB) for comparison
+    group.finish();
+
+    let data_large = load("patent_large.xml");
+    let mut group2 = c.benchmark_group("parallel_1mb");
+    group2.throughput(Throughput::Bytes(data_large.len() as u64));
+
+    group2.bench_function("sequential", |b| {
+        b.iter(|| {
+            let _ = simdxml::parse(&data_large).unwrap();
+        });
+    });
+
+    for threads in [2, 4] {
+        group2.bench_function(format!("parallel_{}t", threads), |b| {
+            b.iter(|| {
+                let _ = simdxml::parallel::parse_parallel(&data_large, threads).unwrap();
+            });
+        });
+    }
+
+    group2.finish();
+}
