@@ -5,32 +5,39 @@ use crate::index::XmlIndex;
 
 impl<'a> XmlIndex<'a> {
     /// Extract an attribute value from a tag by attribute name.
+    /// Zero-allocation: searches raw bytes directly with memchr.
     pub fn get_attribute(&self, tag_idx: usize, attr_name: &str) -> Option<&'a str> {
         let start = self.tag_starts[tag_idx] as usize;
         let end = self.tag_ends[tag_idx] as usize;
         let tag_bytes = &self.input[start..=end];
+        let name = attr_name.as_bytes();
 
-        // Simple attribute parsing: find attr_name="value" or attr_name='value'
-        let attr_search = format!("{}=", attr_name);
-        let tag_str = std::str::from_utf8(tag_bytes).ok()?;
-
-        let attr_pos = tag_str.find(&attr_search)?;
-        let after_eq = attr_pos + attr_search.len();
-        let rest = &tag_str[after_eq..];
-
-        let (quote_char, rest) = if rest.starts_with('"') {
-            ('"', &rest[1..])
-        } else if rest.starts_with('\'') {
-            ('\'', &rest[1..])
-        } else {
-            return None;
-        };
-
-        let end_quote = rest.find(quote_char)?;
-        // Return a slice from the original input
-        let abs_start = start + after_eq + 1;
-        let abs_end = abs_start + end_quote;
-        std::str::from_utf8(&self.input[abs_start..abs_end]).ok()
+        // Scan for attr_name= pattern in tag bytes (no allocation)
+        let mut pos = 0;
+        while pos + name.len() + 1 < tag_bytes.len() {
+            // Find potential attribute name match
+            if tag_bytes[pos..].starts_with(name)
+                && tag_bytes.get(pos + name.len()) == Some(&b'=')
+            {
+                // Verify it's a real attribute boundary (preceded by whitespace or tag start)
+                if pos == 0 || tag_bytes[pos - 1].is_ascii_whitespace() {
+                    let val_start = pos + name.len() + 1;
+                    if val_start < tag_bytes.len() {
+                        let quote = tag_bytes[val_start];
+                        if quote == b'"' || quote == b'\'' {
+                            let content_start = val_start + 1;
+                            if let Some(off) = memchr::memchr(quote, &tag_bytes[content_start..]) {
+                                let abs_start = start + content_start;
+                                let abs_end = abs_start + off;
+                                return std::str::from_utf8(&self.input[abs_start..abs_end]).ok();
+                            }
+                        }
+                    }
+                }
+            }
+            pos += 1;
+        }
+        None
     }
 
     /// Extract namespace declarations (xmlns:prefix="uri") from a tag.

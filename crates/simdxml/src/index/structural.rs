@@ -1,6 +1,6 @@
 use crate::error::{Result, SimdXmlError};
 use crate::index::{TagType, TextRange, XmlIndex};
-use memchr::{memchr, memchr2};
+use memchr::memchr;
 
 /// Build an XmlIndex from XML bytes.
 /// Uses SIMD-accelerated byte scanning (via memchr) for finding structural
@@ -21,6 +21,8 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
         text_child_offsets: Vec::new(),
         text_child_data: Vec::new(),
         close_map: Vec::new(),
+        attr_offsets: Vec::new(),
+        attr_data: Vec::new(),
     };
 
     let mut pos = 0;
@@ -77,15 +79,14 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     }
                     parent_stack.pop();
 
-                    let tag_idx = index.tag_starts.len();
+                    let _tag_idx = index.tag_starts.len();
                     index.tag_starts.push(tag_start as u32);
                     index.tag_ends.push(pos as u32);
                     index.tag_types.push(TagType::Close);
                     index.tag_names.push((name_start as u32, (name_end - name_start) as u16));
                     index.depths.push(depth);
-                    index
-                        .parents
-                        .push(parent_stack.last().copied().unwrap_or(u32::MAX));
+                    index.parents.push(parent_stack.last().copied().unwrap_or(u32::MAX));
+
 
                     last_tag_end = pos;
                     pos += 1;
@@ -93,11 +94,12 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                 b'!' => {
                     if input.get(pos + 2..pos + 4) == Some(b"--") {
                         // Comment: <!-- ... -->
-                        let tag_idx = index.tag_starts.len();
+                        let _tag_idx = index.tag_starts.len();
                         index.tag_starts.push(tag_start as u32);
                         index.tag_types.push(TagType::Comment);
                         index.tag_names.push((0, 0));
                         index.depths.push(depth);
+    
                         index
                             .parents
                             .push(parent_stack.last().copied().unwrap_or(u32::MAX));
@@ -115,12 +117,13 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                         pos += 1;
                     } else if input.get(pos + 2..pos + 9) == Some(b"[CDATA[") {
                         // CDATA: <![CDATA[ ... ]]>
-                        let tag_idx = index.tag_starts.len();
-                        let cdata_content_start = pos + 9;
+                        let _tag_idx = index.tag_starts.len();
+                        let _cdata_content_start = pos + 9;
                         index.tag_starts.push(tag_start as u32);
                         index.tag_types.push(TagType::CData);
                         index.tag_names.push((0, 0));
                         index.depths.push(depth);
+    
                         index
                             .parents
                             .push(parent_stack.last().copied().unwrap_or(u32::MAX));
@@ -157,7 +160,7 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                 }
                 b'?' => {
                     // Processing instruction: <?target ... ?>
-                    let tag_idx = index.tag_starts.len();
+                    let _tag_idx = index.tag_starts.len();
                     pos += 2;
                     let name_start = pos;
                     while pos < input.len()
@@ -171,10 +174,9 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
 
                     index.tag_starts.push(tag_start as u32);
                     index.tag_types.push(TagType::PI);
-                    index
-                        .tag_names
-                        .push((name_start as u32, (name_end - name_start) as u16));
+                    index.tag_names.push((name_start as u32, (name_end - name_start) as u16));
                     index.depths.push(depth);
+
                     index
                         .parents
                         .push(parent_stack.last().copied().unwrap_or(u32::MAX));
@@ -212,7 +214,6 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                             pos += 1;
                             break;
                         }
-                        // Skip quoted attribute values using SIMD-accelerated memchr
                         if input[pos] == b'"' {
                             pos += 1;
                             if let Some(off) = memchr(b'"', &input[pos..]) {
@@ -243,9 +244,7 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     index.tag_starts.push(tag_start as u32);
                     index.tag_ends.push(pos as u32);
                     index.tag_types.push(tag_type);
-                    index
-                        .tag_names
-                        .push((name_start as u32, (name_end - name_start) as u16));
+                    index.tag_names.push((name_start as u32, (name_end - name_start) as u16));
                     index.depths.push(depth);
                     index.parents.push(parent);
 
@@ -260,7 +259,11 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
             }
         }
 
-    index.build_indices();
+    // Only build CSR indices for documents large enough to benefit.
+    // Small docs (< 64 tags) are faster with direct linear scans.
+    if index.tag_count() >= 64 {
+        index.build_indices();
+    }
     Ok(index)
 }
 

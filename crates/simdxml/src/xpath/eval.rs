@@ -158,12 +158,9 @@ pub fn eval_text<'a>(
     for node in nodes {
         match node {
             XPathNode::Element(idx) => {
-                // Use precomputed child text index — O(children) not O(N)
-                let text_children = index.child_text_slice(idx);
-                for &ti in text_children {
-                    let text = index.text_content(&index.text_ranges[ti as usize]);
-                    if !text.is_empty() {
-                        results.push(text);
+                for t in index.direct_text(idx) {
+                    if !t.is_empty() {
+                        results.push(t);
                     }
                 }
             }
@@ -961,6 +958,24 @@ fn eval_child_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
     }
 
     // Use precomputed CSR child indices — O(children_count) instead of O(N)
+    // Falls back to linear scan for small documents (no CSR built).
+    if !index.has_indices() {
+        // Linear scan fallback for small documents
+        let mut children_with_pos: Vec<(u32, XPathNode)> = Vec::new();
+        for i in 0..index.tag_count() {
+            if index.parents[i] == parent_idx as u32 && is_node_tag(index.tag_types[i]) {
+                children_with_pos.push((index.tag_starts[i], XPathNode::Element(i)));
+            }
+        }
+        for (i, range) in index.text_ranges.iter().enumerate() {
+            if range.parent_tag == parent_idx as u32 {
+                children_with_pos.push((range.start, XPathNode::Text(i)));
+            }
+        }
+        children_with_pos.sort_by_key(|(pos, _)| *pos);
+        return children_with_pos.into_iter().map(|(_, node)| node).collect();
+    }
+
     let tags = index.child_tag_slice(parent_idx);
     let texts = index.child_text_slice(parent_idx);
 

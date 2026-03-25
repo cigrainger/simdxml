@@ -48,6 +48,19 @@ pub struct XmlIndex<'a> {
     /// Matching close tag for each open tag. u32::MAX = no match.
     pub(crate) close_map: Vec<u32>,
 
+    /// CSR attribute index: attr_offsets[i]..attr_offsets[i+1] into attr_data.
+    pub(crate) attr_offsets: Vec<u32>,
+    /// Flat array of (name_offset, name_len, value_offset, value_len) tuples.
+    pub(crate) attr_data: Vec<AttrEntry>,
+}
+
+/// A single attribute: byte ranges into the original input.
+#[derive(Debug, Clone, Copy)]
+pub struct AttrEntry {
+    pub name_start: u32,
+    pub name_len: u16,
+    pub value_start: u32,
+    pub value_len: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +176,7 @@ impl<'a> XmlIndex<'a> {
     /// Get child tag indices for a parent (from precomputed CSR index).
     #[inline]
     pub(crate) fn child_tag_slice(&self, parent_idx: usize) -> &[u32] {
-        if parent_idx >= self.child_offsets.len() - 1 {
+        if self.child_offsets.len() < 2 || parent_idx + 1 >= self.child_offsets.len() {
             return &[];
         }
         let start = self.child_offsets[parent_idx] as usize;
@@ -174,12 +187,18 @@ impl<'a> XmlIndex<'a> {
     /// Get child text range indices for a parent (from precomputed CSR index).
     #[inline]
     pub(crate) fn child_text_slice(&self, parent_idx: usize) -> &[u32] {
-        if parent_idx >= self.text_child_offsets.len() - 1 {
+        if self.text_child_offsets.len() < 2 || parent_idx + 1 >= self.text_child_offsets.len() {
             return &[];
         }
         let start = self.text_child_offsets[parent_idx] as usize;
         let end = self.text_child_offsets[parent_idx + 1] as usize;
         &self.text_child_data[start..end]
+    }
+
+    /// Whether precomputed CSR indices are available.
+    #[inline]
+    pub(crate) fn has_indices(&self) -> bool {
+        !self.child_offsets.is_empty()
     }
 
     /// Fast tag name comparison (avoids UTF-8 validation on the hot path).
@@ -249,14 +268,28 @@ impl<'a> XmlIndex<'a> {
 
     /// Get children (direct child open/self-close tags) of a tag.
     pub fn children(&self, parent_idx: usize) -> Vec<usize> {
-        self.child_tag_slice(parent_idx).iter().map(|&i| i as usize).collect()
+        if self.has_indices() {
+            self.child_tag_slice(parent_idx).iter().map(|&i| i as usize).collect()
+        } else {
+            (0..self.tag_count())
+                .filter(|&i| self.parents[i] == parent_idx as u32
+                    && (self.tag_types[i] == TagType::Open || self.tag_types[i] == TagType::SelfClose))
+                .collect()
+        }
     }
 
     /// Get text content directly under a tag (not nested).
     pub fn direct_text(&self, tag_idx: usize) -> Vec<&'a str> {
-        self.child_text_slice(tag_idx).iter()
-            .map(|&ti| self.text_content(&self.text_ranges[ti as usize]))
-            .collect()
+        if self.has_indices() {
+            self.child_text_slice(tag_idx).iter()
+                .map(|&ti| self.text_content(&self.text_ranges[ti as usize]))
+                .collect()
+        } else {
+            self.text_ranges.iter()
+                .filter(|r| r.parent_tag == tag_idx as u32)
+                .map(|r| self.text_content(r))
+                .collect()
+        }
     }
 
     /// Get all text content under a tag (including nested).
