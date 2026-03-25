@@ -566,12 +566,21 @@ fn apply_predicate<'a>(
             Ok(result)
         }
 
-        // Function call as boolean: [contains(., 'text')]
+        // Function call in predicate: if result is a number, treat as positional
+        // (XPath 1.0 §3.4: if result is number, compare to position())
         XPathExpr::FunctionCall(name, args) => {
             let mut result = Vec::new();
             for (i, &node) in nodes.iter().enumerate() {
                 let val = eval_function(index, node, name, args, i + 1, nodes.len())?;
-                if val.is_truthy() {
+                let keep = match &val {
+                    XPathValue::Number(n) => {
+                        // Numeric predicate: position() == round(n)
+                        let pos = (i + 1) as f64;
+                        (pos - n).abs() < 0.5 && !n.is_nan()
+                    }
+                    _ => val.is_truthy(),
+                };
+                if keep {
                     result.push(node);
                 }
             }
@@ -742,8 +751,16 @@ fn eval_function(
         }
         "not" => {
             if let Some(arg) = args.first() {
-                let val = eval_predicate_value(index, node, arg, position, size)?;
-                Ok(XPathValue::Boolean(!val.is_truthy()))
+                // For LocationPath arguments (e.g., not(@x)), check node-set existence
+                // rather than string truthiness. XPath 1.0 §4.3: boolean(node-set) is
+                // true iff the node-set is non-empty.
+                if let XPathExpr::LocationPath(_) = arg {
+                    let nodes = evaluate_in_context(index, node, arg)?;
+                    Ok(XPathValue::Boolean(nodes.is_empty()))
+                } else {
+                    let val = eval_predicate_value(index, node, arg, position, size)?;
+                    Ok(XPathValue::Boolean(!val.is_truthy()))
+                }
             } else {
                 Ok(XPathValue::Boolean(true))
             }
@@ -1038,7 +1055,7 @@ fn evaluate_in_context(
 fn matches_node_test(index: &XmlIndex, node: XPathNode, test: &NodeTest) -> bool {
     match (node, test) {
         (_, NodeTest::Node) => true,
-        (_, NodeTest::Wildcard) => matches!(node, XPathNode::Element(_) | XPathNode::Namespace(_, _)),
+        (_, NodeTest::Wildcard) => matches!(node, XPathNode::Element(_) | XPathNode::Namespace(_, _) | XPathNode::Attribute(_, _)),
         (XPathNode::Text(_), NodeTest::Text) => true,
         (XPathNode::Element(idx), NodeTest::Name(name)) => index.tag_name_eq(idx, name),
         (XPathNode::Element(idx), NodeTest::Comment) => {
@@ -1381,12 +1398,29 @@ fn eval_preceding_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
     let mut result = Vec::new();
 
     // Collect in document order: all elements before this one, excluding ancestors.
-    // Uses O(1) is_ancestor check via pre/post numbering (no Vec allocation).
-    for i in 0..idx {
-        if (index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose)
-            && !index.is_ancestor(i, idx)
-        {
-            result.push(XPathNode::Element(i));
+    if !index.post_order.is_empty() {
+        // O(1) is_ancestor check via pre/post numbering
+        for i in 0..idx {
+            if (index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose)
+                && !index.is_ancestor(i, idx)
+            {
+                result.push(XPathNode::Element(i));
+            }
+        }
+    } else {
+        // Fallback: build ancestor set via parent chain
+        let mut ancestors = std::collections::HashSet::new();
+        let mut current = index.parents[idx];
+        while current != u32::MAX {
+            ancestors.insert(current);
+            current = index.parents[current as usize];
+        }
+        for i in 0..idx {
+            if (index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose)
+                && !ancestors.contains(&(i as u32))
+            {
+                result.push(XPathNode::Element(i));
+            }
         }
     }
 
