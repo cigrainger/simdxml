@@ -48,6 +48,11 @@ pub struct XmlIndex<'a> {
     /// Matching close tag for each open tag. u32::MAX = no match.
     pub(crate) close_map: Vec<u32>,
 
+    /// Post-order number for each tag. Enables O(1) ancestor/descendant checks:
+    /// A is ancestor of B iff pre(A) < pre(B) AND post(A) > post(B).
+    /// (Pre-order number is just the tag index itself.)
+    pub(crate) post_order: Vec<u32>,
+
     // === Tag name interning ===
 
     /// Interned name ID per tag. Same name → same ID. u16::MAX = no name.
@@ -199,6 +204,32 @@ impl<'a> XmlIndex<'a> {
         self.text_child_data = text_child_data;
         self.close_map = close_map;
 
+        // 4. Post-order numbering (O(n)):
+        // Assign increasing post-order numbers. An open tag gets its number
+        // when its close tag is encountered. Enables O(1) ancestor checks:
+        //   A is ancestor of B iff pre(A) < pre(B) AND post(A) > post(B)
+        // where pre-order number is just the tag index.
+        let mut post_order = vec![0u32; n];
+        let mut post_counter: u32 = 0;
+        let mut open_stack: Vec<usize> = Vec::new();
+        for i in 0..n {
+            match self.tag_types[i] {
+                TagType::Open => open_stack.push(i),
+                TagType::Close => {
+                    if let Some(open_idx) = open_stack.pop() {
+                        post_order[open_idx] = post_counter;
+                    }
+                    post_order[i] = post_counter;
+                    post_counter += 1;
+                }
+                TagType::SelfClose | TagType::Comment | TagType::PI | TagType::CData => {
+                    post_order[i] = post_counter;
+                    post_counter += 1;
+                }
+            }
+        }
+        self.post_order = post_order;
+
         // Name interning + inverted index left empty — built on demand
         // via build_name_index() for repeated-query workloads.
     }
@@ -229,6 +260,22 @@ impl<'a> XmlIndex<'a> {
     #[inline]
     pub(crate) fn has_indices(&self) -> bool {
         !self.child_offsets.is_empty()
+    }
+
+    /// O(1) ancestor check using pre/post numbering.
+    /// Returns true if `ancestor_idx` is an ancestor of `descendant_idx`.
+    #[inline]
+    pub(crate) fn is_ancestor(&self, ancestor_idx: usize, descendant_idx: usize) -> bool {
+        if self.post_order.is_empty() { return false; }
+        // pre(A) < pre(B) AND post(A) > post(B)
+        ancestor_idx < descendant_idx
+            && self.post_order[ancestor_idx] > self.post_order[descendant_idx]
+    }
+
+    /// O(1) descendant check. Returns true if `node_idx` is a descendant of `ancestor_idx`.
+    #[inline]
+    pub(crate) fn is_descendant_of(&self, node_idx: usize, ancestor_idx: usize) -> bool {
+        self.is_ancestor(ancestor_idx, node_idx)
     }
 
     /// Build inverted name index for repeated query workloads.

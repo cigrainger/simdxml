@@ -238,9 +238,15 @@ fn eval_location_path<'a>(
             && steps[i].node_test == NodeTest::Node
             && steps[i].predicates.is_empty()
             && steps[i + 1].axis == Axis::Child
-            && steps[i + 1].predicates.is_empty()  // predicates need per-parent context
         {
-            context = eval_fused_descendant_child(index, &context, &steps[i + 1])?;
+            if steps[i + 1].predicates.is_empty() {
+                context = eval_fused_descendant_child(index, &context, &steps[i + 1])?;
+            } else {
+                // Fused scan + per-parent predicate application
+                context = eval_fused_descendant_child_with_preds(
+                    index, &context, &steps[i + 1],
+                )?;
+            }
             i += 2;
         } else {
             context = eval_step(index, &context, &steps[i])?;
@@ -344,6 +350,82 @@ fn eval_fused_descendant_child(
     }
 
     // Fused path produces results in document order; dedup only needed for multi-context
+    if context.len() > 1 {
+        dedup_nodes(&mut result);
+        sort_doc_order(index, &mut result);
+    }
+    Ok(result)
+}
+
+/// Fused descendant scan WITH per-parent predicate application.
+/// Finds all matching elements, groups by parent, applies predicates per group.
+/// Avoids materializing the descendant-or-self mega-nodeset.
+fn eval_fused_descendant_child_with_preds(
+    index: &XmlIndex,
+    context: &[XPathNode],
+    child_step: &Step,
+) -> Result<Vec<XPathNode>> {
+    let mut result = Vec::new();
+
+    for &ctx_node in context {
+        let (scan_start, scan_end) = match ctx_node {
+            XPathNode::Element(DOC_ROOT) => (0, index.tag_count()),
+            XPathNode::Element(idx) if idx < index.tag_count() => {
+                let close = index.matching_close(idx).unwrap_or(index.tag_count());
+                (idx, close)
+            }
+            _ => continue,
+        };
+
+        // Collect all matching elements in one scan
+        let mut all_matches: Vec<XPathNode> = Vec::new();
+        match &child_step.node_test {
+            NodeTest::Name(name) => {
+                for j in scan_start..scan_end {
+                    let tt = index.tag_types[j];
+                    if (tt == TagType::Open || tt == TagType::SelfClose)
+                        && index.tag_name_eq(j, name)
+                    {
+                        all_matches.push(XPathNode::Element(j));
+                    }
+                }
+            }
+            _ => {
+                for j in scan_start..scan_end {
+                    if matches_node_test(index, XPathNode::Element(j), &child_step.node_test) {
+                        all_matches.push(XPathNode::Element(j));
+                    }
+                }
+            }
+        }
+
+        // Group by parent, apply predicates per group
+        // (XPath //p[1] means "first p child of EACH parent")
+        let mut group_start = 0;
+        while group_start < all_matches.len() {
+            let parent = match all_matches[group_start] {
+                XPathNode::Element(idx) => index.parents[idx],
+                _ => u32::MAX,
+            };
+            let mut group_end = group_start + 1;
+            while group_end < all_matches.len() {
+                let p = match all_matches[group_end] {
+                    XPathNode::Element(idx) => index.parents[idx],
+                    _ => u32::MAX,
+                };
+                if p != parent { break; }
+                group_end += 1;
+            }
+            // Apply predicates to this group
+            let mut group = all_matches[group_start..group_end].to_vec();
+            for pred in &child_step.predicates {
+                group = apply_predicate(index, &group, pred)?;
+            }
+            result.extend(group);
+            group_start = group_end;
+        }
+    }
+
     if context.len() > 1 {
         dedup_nodes(&mut result);
         sort_doc_order(index, &mut result);
@@ -1298,21 +1380,11 @@ fn eval_preceding_axis(index: &XmlIndex, node: XPathNode) -> Vec<XPathNode> {
 
     let mut result = Vec::new();
 
-    // All elements before this one, excluding ancestors
-    let ancestors: Vec<u32> = {
-        let mut a = Vec::new();
-        let mut current = index.parents[idx];
-        while current != u32::MAX {
-            a.push(current);
-            current = index.parents[current as usize];
-        }
-        a
-    };
-
-    // Collect in document order (forward), not reverse
+    // Collect in document order: all elements before this one, excluding ancestors.
+    // Uses O(1) is_ancestor check via pre/post numbering (no Vec allocation).
     for i in 0..idx {
         if (index.tag_types[i] == TagType::Open || index.tag_types[i] == TagType::SelfClose)
-            && !ancestors.contains(&(i as u32))
+            && !index.is_ancestor(i, idx)
         {
             result.push(XPathNode::Element(i));
         }
