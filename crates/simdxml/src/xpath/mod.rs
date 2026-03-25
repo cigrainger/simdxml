@@ -3,8 +3,8 @@ pub mod eval;
 pub mod parser;
 
 pub use ast::XPathExpr;
-pub use eval::{evaluate, eval_text, XPathNode};
-pub use parser::parse_xpath;
+pub use eval::{evaluate, eval_text, eval_standalone_expr, StandaloneResult, XPathNode};
+pub use parser::{parse_xpath, parse_xpath_predicate_expr};
 
 use crate::error::Result;
 use crate::index::XmlIndex;

@@ -1,6 +1,7 @@
 use crate::error::{Result, SimdXmlError};
 use crate::index::{TagType, XmlIndex};
 use super::ast::*;
+use super::parser::parse_xpath_predicate_expr;
 
 /// A node in the XPath result set.
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +20,33 @@ fn attr_name_hash(name: &str) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
+}
+
+/// Evaluate a standalone expression (no document context needed).
+/// Returns the result as a string representation matching libxml2 format.
+pub fn eval_standalone_expr(expr_str: &str) -> Result<StandaloneResult> {
+    // Parse as a predicate expression (supports arithmetic, comparisons, functions)
+    let parsed = parse_xpath_predicate_expr(expr_str)?;
+
+    // Create a minimal dummy context
+    let dummy = b"<r/>";
+    let index = crate::index::structural::parse_scalar(dummy)?;
+    let node = XPathNode::Element(DOC_ROOT);
+
+    let value = eval_predicate_value(&index, node, &parsed, 1, 1)?;
+    Ok(match value {
+        XPathValue::Number(n) => StandaloneResult::Number(n),
+        XPathValue::String(s) => StandaloneResult::String(s),
+        XPathValue::Boolean(b) => StandaloneResult::Boolean(b),
+    })
+}
+
+/// Result of standalone expression evaluation.
+#[derive(Debug, Clone)]
+pub enum StandaloneResult {
+    Number(f64),
+    String(String),
+    Boolean(bool),
 }
 
 /// Evaluate an XPath expression against an XmlIndex.

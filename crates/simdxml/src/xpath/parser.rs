@@ -11,6 +11,18 @@ use nom::{
 use super::ast::*;
 use crate::error::{Result, SimdXmlError};
 
+/// Parse a standalone predicate expression (for arithmetic, string, boolean evaluation).
+pub fn parse_xpath_predicate_expr(input: &str) -> Result<XPathExpr> {
+    let input = input.trim();
+    match predicate_expr(input) {
+        Ok(("", expr)) => Ok(expr),
+        Ok((rest, _)) => Err(SimdXmlError::XPathParseError(format!(
+            "Unexpected trailing input: '{rest}'"
+        ))),
+        Err(e) => Err(SimdXmlError::XPathParseError(format!("{e}"))),
+    }
+}
+
 /// Parse an XPath 1.0 expression string.
 pub fn parse_xpath(input: &str) -> Result<XPathExpr> {
     let input = input.trim();

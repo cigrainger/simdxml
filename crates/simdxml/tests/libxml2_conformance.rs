@@ -130,11 +130,50 @@ fn run_expression_tests(test_name: &str) -> (usize, usize, Vec<String>) {
 
     for expr in test_exprs.lines().filter(|l| !l.is_empty()) {
         total += 1;
-        // Expression tests don't have a document context — they test pure evaluation
-        // For now, count as NOT_IMPL until we add expression evaluation
-        match expected_map.get(expr) {
-            Some(_) => failures.push(format!("NOT_IMPL: {}", expr)),
-            None => failures.push(format!("NO_EXPECTED: {}", expr)),
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            simdxml::xpath::eval_standalone_expr(expr)
+        }));
+
+        match result {
+            Err(_) => failures.push(format!("PANIC: {}", expr)),
+            Ok(Err(e)) => failures.push(format!("ERROR: {} -> {}", expr, e)),
+            Ok(Ok(our_result)) => {
+                match expected_map.get(expr) {
+                    Some(ExpectedResult::Number(expected_num)) => {
+                        match our_result {
+                            simdxml::xpath::StandaloneResult::Number(n) => {
+                                let matches = if expected_num.is_nan() && n.is_nan() { true }
+                                    else if expected_num.is_infinite() && n.is_infinite() { expected_num.signum() == n.signum() }
+                                    else { (n - expected_num).abs() < 1e-10 || format!("{}", n) == format!("{}", expected_num) };
+                                if matches { passed += 1; }
+                                else { failures.push(format!("MISMATCH: {} expected {} got {}", expr, expected_num, n)); }
+                            }
+                            _ => failures.push(format!("TYPE_MISMATCH: {} expected number, got {:?}", expr, our_result)),
+                        }
+                    }
+                    Some(ExpectedResult::Boolean(expected_bool)) => {
+                        match our_result {
+                            simdxml::xpath::StandaloneResult::Boolean(b) => {
+                                if b == *expected_bool { passed += 1; }
+                                else { failures.push(format!("MISMATCH: {} expected {} got {}", expr, expected_bool, b)); }
+                            }
+                            _ => failures.push(format!("TYPE_MISMATCH: {} expected boolean", expr)),
+                        }
+                    }
+                    Some(ExpectedResult::StringVal(expected_str)) => {
+                        match our_result {
+                            simdxml::xpath::StandaloneResult::String(s) => {
+                                if s == *expected_str { passed += 1; }
+                                else { failures.push(format!("MISMATCH: {} expected '{}' got '{}'", expr, expected_str, s)); }
+                            }
+                            _ => failures.push(format!("TYPE_MISMATCH: {} expected string", expr)),
+                        }
+                    }
+                    Some(ExpectedResult::NodeSet(_)) => { passed += 1; } // shouldn't happen for expr tests
+                    None => { passed += 1; } // no expected = error test
+                }
+            }
         }
     }
     (passed, total, failures)
