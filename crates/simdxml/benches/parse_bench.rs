@@ -2,6 +2,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use std::fs;
 
 const BENCH_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/bench");
+const REALWORLD_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/realworld");
 
 fn load(name: &str) -> Vec<u8> {
     fs::read(format!("{}/{}", BENCH_DIR, name)).unwrap()
@@ -163,11 +164,18 @@ fn bench_xpath(c: &mut Criterion) {
     let index = simdxml::parse(&data).unwrap();
 
     let queries = [
+        // Simple patterns
         ("descendant", "//claim"),
         ("child_path", "/corpus/patent/claims/claim"),
         ("predicate", "//claim[@type='independent']"),
         ("text", "//title/text()"),
         ("wildcard", "//patent/*"),
+        // Complex patterns (multi-step, nested predicates, axes)
+        ("nested_desc", "//patent//claim"),
+        ("ancestor", "//claim/ancestor::patent"),
+        ("following_sib", "//title/following-sibling::*"),
+        ("multi_pred", "//claim[@type='independent'][@num='1']"),
+        ("desc_then_child", "//claims/claim[@type='dependent']"),
     ];
 
     let mut group = c.benchmark_group("xpath");
@@ -234,6 +242,64 @@ fn bench_end_to_end(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Real-world XML files (from roxmltree + community benchmarks)
+// ============================================================================
+
+fn bench_realworld(c: &mut Criterion) {
+    let files = [
+        "gigantic.svg",     // 1.3 MB SVG
+        "huge.xml",         // 835 KB generic XML
+        "large.plist",      // 321 KB Apple plist
+        "attributes.xml",   // 271 KB attribute-heavy
+        "medium.svg",       // 155 KB SVG
+        "text.xml",         // 129 KB text-heavy
+        "cdata.xml",        // 102 KB CDATA-heavy
+        "tiger.svg",        // 69 KB classic benchmark SVG
+        "maven-pom.xml",    // 46 KB real config
+        "cerknicko-jezero.gpx", // 36 KB GPS data
+    ];
+
+    for filename in &files {
+        let path = format!("{}/{}", REALWORLD_DIR, filename);
+        let data = match fs::read(&path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let data_str = std::str::from_utf8(&data).unwrap();
+        let label = filename.trim_end_matches(".xml")
+            .trim_end_matches(".svg")
+            .trim_end_matches(".gpx")
+            .trim_end_matches(".plist");
+
+        let mut group = c.benchmark_group(format!("realworld/{}", label));
+        group.throughput(Throughput::Bytes(data.len() as u64));
+
+        group.bench_function("simdxml", |b| {
+            b.iter(|| { let _ = simdxml::parse(&data).unwrap(); });
+        });
+
+        group.bench_function("quick_xml", |b| {
+            b.iter(|| {
+                let mut reader = quick_xml::Reader::from_str(data_str);
+                loop {
+                    match reader.read_event() {
+                        Ok(quick_xml::events::Event::Eof) => break,
+                        Ok(_) => {}
+                        Err(e) => panic!("{}", e),
+                    }
+                }
+            });
+        });
+
+        group.bench_function("roxmltree", |b| {
+            b.iter(|| { let _ = roxmltree::Document::parse(data_str).unwrap(); });
+        });
+
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_parse_throughput,
@@ -241,5 +307,6 @@ criterion_group!(
     bench_parse_scaling,
     bench_xpath,
     bench_end_to_end,
+    bench_realworld,
 );
 criterion_main!(benches);

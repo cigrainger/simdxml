@@ -106,12 +106,19 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                         index.parents.push(parent_stack.last().copied().unwrap_or(u32::MAX));
 
                         pos += 4;
-                        while pos + 2 < input.len() {
-                            if &input[pos..pos + 3] == b"-->" {
-                                pos += 2;
+                        // SIMD-accelerated: find '-' then check for '-->'
+                        loop {
+                            if let Some(off) = memchr(b'-', &input[pos..]) {
+                                pos += off;
+                                if pos + 2 < input.len() && &input[pos..pos + 3] == b"-->" {
+                                    pos += 2;
+                                    break;
+                                }
+                                pos += 1;
+                            } else {
+                                pos = input.len();
                                 break;
                             }
-                            pos += 1;
                         }
                         index.tag_ends.push(pos as u32);
                         last_tag_end = pos;
@@ -126,21 +133,26 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
 
                         pos += 9;
                         let content_start = pos;
-                        while pos + 2 < input.len() {
-                            if &input[pos..pos + 3] == b"]]>" {
-                                // Record CDATA content as text
-                                let parent = parent_stack.last().copied().unwrap_or(u32::MAX);
-                                if pos > content_start {
-                                    index.text_ranges.push(TextRange {
-                                        start: content_start as u32,
-                                        end: pos as u32,
-                                        parent_tag: parent,
-                                    });
+                        // SIMD-accelerated: find ']' then check for ']]>'
+                        loop {
+                            if let Some(off) = memchr(b']', &input[pos..]) {
+                                pos += off;
+                                if pos + 2 < input.len() && &input[pos..pos + 3] == b"]]>" {
+                                    let parent = parent_stack.last().copied().unwrap_or(u32::MAX);
+                                    if pos > content_start {
+                                        index.text_ranges.push(TextRange {
+                                            start: content_start as u32,
+                                            end: pos as u32,
+                                            parent_tag: parent,
+                                        });
+                                    }
+                                    pos += 2;
+                                    break;
                                 }
-                                pos += 2;
+                                pos += 1;
+                            } else {
                                 break;
                             }
-                            pos += 1;
                         }
                         index.tag_ends.push(pos as u32);
                         last_tag_end = pos;
