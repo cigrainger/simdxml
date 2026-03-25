@@ -1,8 +1,8 @@
 # simdxml
 
-**SIMD-accelerated XML parser with full XPath 1.0 support.**
+**A SIMD-accelerated XML parser with full XPath 1.0 support.**
 
-The first production SIMD XML parser. Uses a two-pass structural indexing architecture (adapted from [simdjson](https://github.com/simdjson/simdjson)) to parse XML at multi-GB/s speeds, then evaluates XPath 1.0 expressions against flat arrays instead of a DOM tree.
+Uses a two-pass structural indexing architecture (adapted from [simdjson](https://github.com/simdjson/simdjson)) to parse XML and evaluate XPath expressions against flat arrays instead of a DOM tree.
 
 ## Status
 
