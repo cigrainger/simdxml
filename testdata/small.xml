@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<patent country="US" kind="B2">
+  <title>Prosthetic Arm Device</title>
+  <abstract>A prosthetic arm device with improved grip strength and neural feedback.</abstract>
+  <description>
+    <p>The present invention relates to prosthetic arm devices.</p>
+    <p>More specifically, it provides improved grip strength through a novel actuator mechanism.</p>
+  </description>
+  <claims>
+    <claim num="1" type="independent">A prosthetic arm device comprising: a grip actuator; a neural interface sensor; and a feedback controller.</claim>
+    <claim num="2" type="dependent">The device of claim 1, wherein the grip actuator comprises a piezoelectric element.</claim>
+    <claim num="3" type="dependent">The device of claim 1, further comprising a wrist rotation mechanism.</claim>
+  </claims>
+  <citations>
+    <citation>
+      <ref country="US" num="5081869" kind="A"/>
+    </citation>
+    <citation>
+      <ref country="US" num="6899355" kind="B2"/>
+    </citation>
+  </citations>
+</patent>

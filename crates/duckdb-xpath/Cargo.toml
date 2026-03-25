@@ -1,0 +1,16 @@
+[package]
+name = "duckdb_xpath"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[[example]]
+name = "duckdb_xpath"
+path = "src/wasm_lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+duckdb = { version = "=1.10500.0", features = ["loadable-extension"] }
+simdxml = { path = "../simdxml" }

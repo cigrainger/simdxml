@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/simdxml", "crates/simdxml-cli", "crates/duckdb-xpath"]
+resolver = "2"
+
+[profile.release]
+lto = true
+strip = true
+
+[profile.bench]
+lto = true
