@@ -23,6 +23,15 @@ pub enum SimdXmlError {
 
     #[error("Invalid XML: {0}")]
     InvalidXml(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Invalid .sxi file: {0}")]
+    InvalidSxi(String),
+
+    #[error("Stale .sxi index: XML content has changed since index was built")]
+    StaleSxi,
 }
 
 pub type Result<T> = std::result::Result<T, SimdXmlError>;

@@ -64,13 +64,29 @@ pub struct XmlIndex<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum TagType {
-    Open,      // <tag>
-    Close,     // </tag>
-    SelfClose, // <tag/>
-    Comment,   // <!-- ... -->
-    CData,     // <![CDATA[ ... ]]>
-    PI,        // <?target ... ?>
+    Open = 0,      // <tag>
+    Close = 1,     // </tag>
+    SelfClose = 2, // <tag/>
+    Comment = 3,   // <!-- ... -->
+    CData = 4,     // <![CDATA[ ... ]]>
+    PI = 5,        // <?target ... ?>
+}
+
+impl TagType {
+    /// Convert from u8 (for deserialization). Returns None for invalid values.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(TagType::Open),
+            1 => Some(TagType::Close),
+            2 => Some(TagType::SelfClose),
+            3 => Some(TagType::Comment),
+            4 => Some(TagType::CData),
+            5 => Some(TagType::PI),
+            _ => None,
+        }
+    }
 }
 
 /// Interns tag name byte slices to u16 IDs during parsing.
@@ -107,6 +123,7 @@ impl<'a> NameInterner<'a> {
 
 /// A text content node between tags.
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct TextRange {
     /// Byte offset of text start
     pub start: u32,

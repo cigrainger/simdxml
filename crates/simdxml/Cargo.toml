@@ -12,6 +12,8 @@ categories = ["parser-implementations", "text-processing"]
 nom = "7"
 thiserror = "2"
 memchr = "2"
+memmap2 = "0.9"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 criterion = "0.5"

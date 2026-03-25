@@ -23,11 +23,13 @@
 
 pub mod error;
 pub mod index;
+pub mod persist;
 pub mod simd;
 pub mod xpath;
 
 pub use error::{Result, SimdXmlError};
 pub use index::XmlIndex;
+pub use persist::OwnedXmlIndex;
 pub use xpath::CompiledXPath;
 
 /// Parse XML bytes and build a structural index.
@@ -56,6 +58,32 @@ pub fn parse(input: &[u8]) -> Result<XmlIndex<'_>> {
         // Text-heavy/mixed: memchr jump-based scanner wins (skips text regions)
         index::structural::parse_scalar(input)
     }
+}
+
+/// Load a pre-built `.sxi` index if it exists and is fresh, otherwise parse
+/// and save the index for next time. Returns an `OwnedXmlIndex` that derefs
+/// to `XmlIndex`.
+pub fn load_or_parse(xml_path: impl AsRef<std::path::Path>) -> Result<OwnedXmlIndex> {
+    let xml_path = xml_path.as_ref();
+    let sxi_path = xml_path.with_extension("sxi");
+
+    // Try loading existing .sxi
+    if sxi_path.exists() {
+        match persist::load_index(&sxi_path, xml_path) {
+            Ok(owned) => return Ok(owned),
+            Err(SimdXmlError::StaleSxi) => { /* fall through to re-parse */ }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Parse from scratch, serialize for next time
+    let xml_bytes = std::fs::read(xml_path)?;
+    let mut index = parse(&xml_bytes)?;
+    index.build_name_index();
+    persist::serialize_index(&index, &xml_bytes, &sxi_path)?;
+
+    // Load the freshly-written .sxi (so we get an OwnedXmlIndex)
+    persist::load_index_with_bytes(&sxi_path, xml_bytes)
 }
 
 // Convenience methods on XmlIndex

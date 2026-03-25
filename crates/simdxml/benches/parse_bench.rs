@@ -381,6 +381,83 @@ fn bench_realworld(c: &mut Criterion) {
     }
 }
 
+// ============================================================================
+// Persistent index: mmap load vs parse-from-scratch
+// ============================================================================
+
+fn bench_persist(c: &mut Criterion) {
+    let data = load("patent_large.xml");
+    let mut index = simdxml::parse(&data).unwrap();
+    index.build_name_index();
+
+    // Write XML and .sxi to real temp files for file I/O benchmarks
+    let xml_path = std::env::temp_dir().join("bench_patent_large.xml");
+    let sxi_path = std::env::temp_dir().join("bench_patent_large.sxi");
+    fs::write(&xml_path, &data).unwrap();
+    simdxml::persist::serialize_index(&index, &data, &sxi_path).unwrap();
+
+    let mut group = c.benchmark_group("persist");
+    group.throughput(Throughput::Bytes(data.len() as u64));
+
+    // Baseline: parse from in-memory XML bytes
+    group.bench_function("parse_from_xml", |b| {
+        b.iter(|| {
+            let _ = simdxml::parse(&data).unwrap();
+        });
+    });
+
+    // Load from .sxi with in-memory XML (shows deserialization cost without file I/O)
+    group.bench_function("load_sxi_inmem", |b| {
+        b.iter(|| {
+            let _ = simdxml::persist::load_index_with_bytes(&sxi_path, data.clone()).unwrap();
+        });
+    });
+
+    // Load from .sxi with real file I/O: mmap XML file + read .sxi from disk
+    group.bench_function("load_sxi_mmap", |b| {
+        b.iter(|| {
+            let _ = simdxml::persist::load_index(&sxi_path, &xml_path).unwrap();
+        });
+    });
+
+    // End-to-end: parse + build name index + 3 queries
+    group.bench_function("parse_then_3_queries", |b| {
+        let queries = [
+            simdxml::CompiledXPath::compile("//title").unwrap(),
+            simdxml::CompiledXPath::compile("//claim[@type='independent']").unwrap(),
+            simdxml::CompiledXPath::compile("//citation/ref").unwrap(),
+        ];
+        b.iter(|| {
+            let mut idx = simdxml::parse(&data).unwrap();
+            idx.build_name_index();
+            for q in &queries {
+                let _ = q.eval(&idx).unwrap();
+            }
+        });
+    });
+
+    // End-to-end: mmap load + 3 queries (real file I/O)
+    group.bench_function("sxi_mmap_then_3_queries", |b| {
+        let queries = [
+            simdxml::CompiledXPath::compile("//title").unwrap(),
+            simdxml::CompiledXPath::compile("//claim[@type='independent']").unwrap(),
+            simdxml::CompiledXPath::compile("//citation/ref").unwrap(),
+        ];
+        b.iter(|| {
+            let idx = simdxml::persist::load_index(&sxi_path, &xml_path).unwrap();
+            for q in &queries {
+                let _ = q.eval(&idx).unwrap();
+            }
+        });
+    });
+
+    group.finish();
+
+    // Cleanup
+    fs::remove_file(&sxi_path).ok();
+    fs::remove_file(&xml_path).ok();
+}
+
 criterion_group!(
     benches,
     bench_parse_throughput,
@@ -390,5 +467,6 @@ criterion_group!(
     bench_end_to_end,
     bench_multi_query,
     bench_realworld,
+    bench_persist,
 );
 criterion_main!(benches);
