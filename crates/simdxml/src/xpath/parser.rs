@@ -359,11 +359,11 @@ fn comparison_op(input: &str) -> IResult<&str, BinaryOp> {
         nom::combinator::map(char('='), |_| BinaryOp::Eq),
         nom::combinator::map(char('<'), |_| BinaryOp::Lt),
         nom::combinator::map(char('>'), |_| BinaryOp::Gt),
-        nom::combinator::map(tag(" div "), |_| BinaryOp::Div),
-        nom::combinator::map(tag(" mod "), |_| BinaryOp::Mod),
-        nom::combinator::map(tag(" + "), |_| BinaryOp::Add),
-        nom::combinator::map(tag(" - "), |_| BinaryOp::Sub),
-        nom::combinator::map(tag(" * "), |_| BinaryOp::Mul),
+        nom::combinator::map(tag("div"), |_| BinaryOp::Div),
+        nom::combinator::map(tag("mod"), |_| BinaryOp::Mod),
+        nom::combinator::map(char('+'), |_| BinaryOp::Add),
+        nom::combinator::map(char('-'), |_| BinaryOp::Sub),
+        nom::combinator::map(char('*'), |_| BinaryOp::Mul),
     ))(input)
 }
 
