@@ -88,7 +88,7 @@ fn nodes_to_descriptions(index: &simdxml::XmlIndex, nodes: &[XPathNode]) -> Vec<
     use simdxml::index::TagType;
     nodes.iter().filter_map(|n| match n {
         XPathNode::Element(idx) if *idx < index.tag_count() => {
-            match index.tag_types[*idx] {
+            match index.tag_type(*idx) {
                 TagType::Comment => Some("COMMENT".to_string()),
                 TagType::PI | TagType::CData => None, // skip — test parser also ignores these
                 _ => Some(format!("ELEMENT:{}", index.tag_name(*idx))),

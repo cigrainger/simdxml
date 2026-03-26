@@ -1,17 +1,42 @@
-pub mod analyze;
-pub mod ast;
-pub mod eval;
-pub mod parser;
-pub mod simd_pred;
+//! XPath 1.0 evaluation engine.
+//!
+//! Parses XPath expressions into an AST, then evaluates them against an
+//! [`XmlIndex`] using array operations instead of pointer-chasing through a DOM.
+//! All 13 XPath axes are supported, along with predicates, functions, and operators.
 
+pub(crate) mod analyze;
+pub mod ast;
+pub(crate) mod eval;
+pub(crate) mod parser;
+pub(crate) mod simd_pred;
+
+// Public types and functions
 pub use ast::XPathExpr;
-pub use eval::{evaluate, evaluate_from_context, eval_text, extract_text, eval_standalone_expr, eval_expr_with_doc, eval_expr_with_context, eval_xpath, StandaloneResult, XPathNode, XPathResult};
-pub use parser::{parse_xpath, parse_xpath_predicate_expr};
+pub use eval::{eval_standalone_expr, extract_text, StandaloneResult, XPathNode, XPathResult};
+
+// Internal functions used by lib.rs and CLI
+// Used internally and by conformance tests
+#[doc(hidden)]
+pub use eval::{evaluate, evaluate_from_context};
+pub(crate) use eval::{eval_text, eval_expr_with_doc, eval_expr_with_context, eval_xpath};
+#[doc(hidden)]
+pub use parser::parse_xpath;
 
 use crate::error::Result;
 use crate::index::XmlIndex;
 
 /// Compiled XPath expression — reusable across documents.
+///
+/// Compile once, evaluate many times. Avoids re-parsing the expression string
+/// on each call. Use this for batch processing or repeated queries.
+///
+/// ```rust
+/// let compiled = simdxml::CompiledXPath::compile("//claim").unwrap();
+/// let xml = b"<r><claim>A</claim><claim>B</claim></r>";
+/// let index = simdxml::parse(xml).unwrap();
+/// let results = compiled.eval_text(&index).unwrap();
+/// assert_eq!(results, vec!["A", "B"]);
+/// ```
 pub struct CompiledXPath {
     expr: XPathExpr,
 }

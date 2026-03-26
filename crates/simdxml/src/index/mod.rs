@@ -1,6 +1,6 @@
-pub mod lazy;
-pub mod structural;
-pub mod tags;
+pub(crate) mod lazy;
+pub(crate) mod structural;
+pub(crate) mod tags;
 
 /// The structural index — flat arrays, no DOM tree.
 ///
@@ -20,13 +20,13 @@ pub struct XmlIndex<'a> {
     pub(crate) tag_ends: Vec<u64>,
 
     /// Tag type classification
-    pub tag_types: Vec<TagType>,
+    pub(crate) tag_types: Vec<TagType>,
 
     /// Tag name: (byte offset, length) into input
     pub(crate) tag_names: Vec<(u64, u16)>,
 
     /// Nesting depth of each tag (0 = root level)
-    pub depths: Vec<u16>,
+    pub(crate) depths: Vec<u16>,
 
     /// Index of parent tag (into tag_starts array). Root tags have parent = u32::MAX.
     pub(crate) parents: Vec<u32>,
@@ -424,6 +424,23 @@ impl<'a> XmlIndex<'a> {
     /// Number of text content ranges.
     pub fn text_count(&self) -> usize {
         self.text_ranges.len()
+    }
+
+    /// Get the tag type at the given index.
+    #[inline]
+    pub fn tag_type(&self, idx: usize) -> TagType {
+        self.tag_types[idx]
+    }
+
+    /// Get the nesting depth of a tag (0 = root level).
+    #[inline]
+    pub fn depth(&self, idx: usize) -> u16 {
+        self.depths[idx]
+    }
+
+    /// Maximum nesting depth in the document.
+    pub fn max_depth(&self) -> u16 {
+        self.depths.iter().copied().max().unwrap_or(0)
     }
 
     /// Find the index of the close tag matching an open tag.

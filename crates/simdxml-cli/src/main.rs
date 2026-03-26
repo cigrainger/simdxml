@@ -403,8 +403,8 @@ fn run_info(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
 
         let mut name_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
         for i in 0..index.tag_count() {
-            if index.tag_types[i] == simdxml::index::TagType::Open
-                || index.tag_types[i] == simdxml::index::TagType::SelfClose
+            if index.tag_type(i) == simdxml::index::TagType::Open
+                || index.tag_type(i) == simdxml::index::TagType::SelfClose
             {
                 *name_counts.entry(index.tag_name(i)).or_default() += 1;
             }
@@ -424,7 +424,7 @@ fn run_info(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
             }
         }
 
-        let max_depth = index.depths.iter().copied().max().unwrap_or(0);
+        let max_depth = index.max_depth();
         writeln!(out, "  max depth: {max_depth}")?;
 
         if args.len() > 1 && idx < args.len() - 1 { writeln!(out)?; }

@@ -58,9 +58,9 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
         };
         // Find root element (first Open/SelfClose at depth 0)
         let root_elem_idx = (0..index.tag_count())
-            .find(|&i| index.depths[i] == 0
-                && (index.tag_types[i] == simdxml::index::TagType::Open
-                    || index.tag_types[i] == simdxml::index::TagType::SelfClose))
+            .find(|&i| index.depth(i) == 0
+                && (index.tag_type(i) == simdxml::index::TagType::Open
+                    || index.tag_type(i) == simdxml::index::TagType::SelfClose))
             .unwrap_or(0);
 
         // Determine first_child context: use context_xpath if specified, else root element
