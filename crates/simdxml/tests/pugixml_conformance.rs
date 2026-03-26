@@ -74,10 +74,12 @@ fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
 
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         if ctx == "first_child" {
-                            // Evaluate relative path from root element
                             index.xpath_from(&xpath_str, root_elem)
                         } else {
-                            index.xpath(&xpath_str)
+                            // pugixml "doc" context = virtual document root,
+                            // not the document element. Use evaluate() directly.
+                            let expr = simdxml::xpath::parse_xpath(&xpath_str)?;
+                            simdxml::xpath::evaluate(&index, &expr)
                         }
                     }));
 
