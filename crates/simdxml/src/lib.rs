@@ -1,25 +1,130 @@
-//! simdxml — SIMD-accelerated XML parser with full XPath 1.0 support.
+//! SIMD-accelerated XML parser with XPath 1.0 evaluation.
 //!
-//! The world's first production SIMD XML parser. Uses a two-pass structural
-//! indexing architecture (adapted from simdjson) to parse XML at 2-3 GB/s,
-//! then evaluates XPath 1.0 expressions against flat arrays instead of a DOM.
+//! `simdxml` parses XML into flat arrays instead of a DOM tree, then evaluates
+//! XPath expressions against those arrays. The approach adapts
+//! [simdjson](https://simdjson.org/)'s structural indexing architecture to XML:
+//! SIMD instructions classify structural characters (`<`, `>`, `"`, etc.) in
+//! parallel, producing a compact index that supports random-access XPath
+//! evaluation without building a pointer-heavy tree.
+//!
+//! The structural index uses ~16 bytes per tag (vs ~35 for a typical DOM node),
+//! has better cache locality for axis traversal, and supports all 13 XPath 1.0
+//! axes via array operations with O(1) ancestor/descendant checks.
 //!
 //! # Quick Start
 //!
 //! ```rust
-//! use simdxml::{parse, xpath};
+//! let xml = b"<library><book><title>Rust</title></book></library>";
+//! let index = simdxml::parse(xml).unwrap();
 //!
-//! let xml = b"<patent><claim>A device for...</claim></patent>";
-//! let index = parse(xml).unwrap();
-//!
-//! // One-shot XPath
-//! let texts = index.xpath_text("//claim").unwrap();
-//! assert_eq!(texts, vec!["A device for..."]);
-//!
-//! // Compiled XPath (reusable across documents)
-//! let expr = xpath::CompiledXPath::compile("//claim").unwrap();
-//! let texts = expr.eval_text(&index).unwrap();
+//! let titles = index.xpath_text("//title").unwrap();
+//! assert_eq!(titles, vec!["Rust"]);
 //! ```
+//!
+//! # Compiled Queries
+//!
+//! For repeated queries (batch processing, multiple documents), compile the
+//! XPath expression once and reuse it:
+//!
+//! ```rust
+//! use simdxml::CompiledXPath;
+//!
+//! let query = CompiledXPath::compile("//title").unwrap();
+//!
+//! let docs: Vec<&[u8]> = vec![
+//!     b"<r><title>A</title></r>",
+//!     b"<r><title>B</title></r>",
+//! ];
+//! for doc in &docs {
+//!     let index = simdxml::parse(doc).unwrap();
+//!     let results = query.eval_text(&index).unwrap();
+//!     assert_eq!(results.len(), 1);
+//! }
+//! ```
+//!
+//! # Scalar Expressions
+//!
+//! Top-level scalar expressions (`count()`, `string()`, `boolean()`, arithmetic)
+//! are supported via [`XmlIndex::eval`]:
+//!
+//! ```rust
+//! let xml = b"<r><item/><item/><item/></r>";
+//! let mut index = simdxml::parse(xml).unwrap();
+//!
+//! match index.eval("count(//item)").unwrap() {
+//!     simdxml::XPathResult::Number(n) => assert_eq!(n, 3.0),
+//!     _ => panic!("expected number"),
+//! }
+//! ```
+//!
+//! # Batch Processing
+//!
+//! Process many documents with a single compiled query. The batch API
+//! handles bloom filter prescanning (skip files that can't match) and
+//! lazy parsing (only index tags relevant to the query):
+//!
+//! ```rust
+//! use simdxml::{batch, CompiledXPath};
+//!
+//! let docs: Vec<&[u8]> = vec![
+//!     b"<r><claim>First</claim></r>",
+//!     b"<r><other>No claims here</other></r>",
+//!     b"<r><claim>Third</claim></r>",
+//! ];
+//! let query = CompiledXPath::compile("//claim").unwrap();
+//! let results = batch::eval_batch_text_bloom(&docs, &query).unwrap();
+//!
+//! assert_eq!(results[0], vec!["First"]);
+//! assert!(results[1].is_empty()); // skipped via bloom filter
+//! assert_eq!(results[2], vec!["Third"]);
+//! ```
+//!
+//! # Parallel Parsing
+//!
+//! Large files can be split across cores for parallel structural indexing.
+//! Each chunk is parsed independently, then merged:
+//!
+//! ```rust
+//! # let xml = b"<r><a>1</a><b>2</b></r>";
+//! let index = simdxml::parallel::parse_parallel(xml, 4).unwrap();
+//! assert!(index.tag_count() > 0);
+//! ```
+//!
+//! # Lazy Parsing
+//!
+//! When you know the query ahead of time, [`parse_for_xpath`] only indexes
+//! tags relevant to the expression — skipping 70-90% of index construction
+//! for selective queries on large documents:
+//!
+//! ```rust
+//! let xml = b"<r><a>1</a><b>2</b><c>3</c></r>";
+//! let index = simdxml::parse_for_xpath(xml, "//a").unwrap();
+//! let texts = index.xpath_text("//a").unwrap();
+//! assert_eq!(texts, vec!["1"]);
+//! ```
+//!
+//! # Persistent Indices
+//!
+//! For files queried repeatedly, [`load_or_parse`] saves the structural index
+//! to a `.sxi` sidecar file and reloads it via mmap on subsequent calls:
+//!
+//! ```rust,no_run
+//! let index = simdxml::load_or_parse("large_file.xml").unwrap();
+//! // First call: parses and saves large_file.sxi
+//! // Subsequent calls: mmap the .sxi, skip parsing entirely
+//! ```
+//!
+//! # Platform Support
+//!
+//! | Platform | SIMD Backend | Status |
+//! |----------|-------------|--------|
+//! | aarch64 (Apple Silicon, ARM) | NEON 128-bit | Production |
+//! | x86_64 | Scalar (memchr-accelerated) | Working |
+//! | x86_64 | SSE4.2 / AVX2 | In progress |
+//! | wasm32 | Scalar | Planned |
+//!
+//! The parser automatically selects the best available backend at runtime
+//! (compile-time on aarch64). A scalar fallback is always available.
 
 pub mod batch;
 pub mod bloom;
