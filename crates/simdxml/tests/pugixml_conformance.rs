@@ -38,7 +38,7 @@ struct TestBlock {
 }
 
 fn run_pugixml_tests() -> (usize, usize, Vec<String>) {
-    let json_str = include_str!("../../../tests/data/pugixml_xpath_tests.json");
+    let json_str = include_str!("../../../testdata/pugixml_xpath_tests.json");
     let data: TestData = serde_json::from_str(json_str).unwrap();
 
     let mut passed = 0;
