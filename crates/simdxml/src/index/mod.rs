@@ -145,19 +145,18 @@ impl<'a> XmlIndex<'a> {
     /// Build precomputed indices for fast XPath evaluation.
     /// Called once after structural parsing. O(n) time, flat memory layout.
     ///
-    /// Runs 3 independent computations concurrently:
-    /// - Thread 1: CSR child index (tag children)
-    /// - Thread 2: CSR text child index (text range children)
-    /// - Main thread: Fused close_map + post_order (single stack-based pass)
+    /// If close_map/post_order are already populated (e.g., from parallel merge),
+    /// skips those and only builds CSR indices. CSR builds run concurrently.
     pub(crate) fn build_indices(&mut self) {
         let n = self.tag_count();
+        let need_close_map = self.close_map.is_empty();
 
         // Shared read-only references for parallel work
         let tag_types = &self.tag_types;
         let parents = &self.parents;
         let text_ranges = &self.text_ranges;
 
-        // Run CSR builds and close_map+post_order concurrently
+        // Run CSR builds (and optionally close_map+post_order) concurrently
         let (child_offsets, child_data, text_child_offsets, text_child_data,
              close_map, post_order) = std::thread::scope(|scope| {
 
@@ -171,24 +170,27 @@ impl<'a> XmlIndex<'a> {
                 build_csr_text_children(text_ranges, n)
             });
 
-            // Main thread: fused close_map + post_order (single pass)
-            let (close_map, post_order) = build_close_map_and_post_order(tag_types, n);
+            // Main thread: close_map + post_order (only if not pre-computed)
+            let (cm, po) = if need_close_map {
+                build_close_map_and_post_order(tag_types, n)
+            } else {
+                (Vec::new(), Vec::new()) // already populated
+            };
 
             let (co, cd) = csr_children.join().unwrap();
             let (tco, tcd) = csr_text.join().unwrap();
 
-            (co, cd, tco, tcd, close_map, post_order)
+            (co, cd, tco, tcd, cm, po)
         });
 
         self.child_offsets = child_offsets;
         self.child_data = child_data;
         self.text_child_offsets = text_child_offsets;
         self.text_child_data = text_child_data;
-        self.close_map = close_map;
-        self.post_order = post_order;
-
-        // Name interning + inverted index left empty — built on demand
-        // via build_name_index() for repeated-query workloads.
+        if need_close_map {
+            self.close_map = close_map;
+            self.post_order = post_order;
+        }
     }
 
     /// Get child tag indices for a parent (from precomputed CSR index).
@@ -451,7 +453,7 @@ impl<'a> XmlIndex<'a> {
 // === Free functions for parallel build_indices ===
 
 /// Build CSR child index from tag_types and parents arrays.
-fn build_csr_children(
+pub(crate) fn build_csr_children(
     tag_types: &[TagType],
     parents: &[u32],
     n: usize,
@@ -493,7 +495,7 @@ fn build_csr_children(
 }
 
 /// Build CSR text child index from text_ranges.
-fn build_csr_text_children(
+pub(crate) fn build_csr_text_children(
     text_ranges: &[TextRange],
     n: usize,
 ) -> (Vec<u32>, Vec<u32>) {

@@ -367,22 +367,21 @@ fn merge_chunks<'a>(input: &'a [u8], chunks: Vec<ChunkResult>) -> Result<XmlInde
         text_ranges.extend_from_slice(&chunk.text_ranges);
     }
 
-    // === Compute depth, parents, AND fix text range parents in one pass ===
-    // Text ranges are sorted by start position (same order as tags).
-    // We walk tags and text ranges together, using the parent stack to assign
-    // text range parents in O(n + t) total.
+    // === Fused pass: depth, parents, close_map, post_order, text parents ===
+    // All use the same stack walk. Fusing avoids a separate O(n) pass in build_indices.
     let n = tag_types.len();
     let mut depths = Vec::with_capacity(n);
     let mut parents = Vec::with_capacity(n);
+    let mut close_map = vec![u32::MAX; n];
+    let mut post_order = vec![0u32; n];
     let mut depth: u16 = 0;
     let mut parent_stack: Vec<u32> = Vec::new();
-
-    let mut text_idx = 0; // cursor into text_ranges
+    let mut post_counter: u32 = 0;
+    let mut text_idx = 0;
 
     for i in 0..n {
         let tag_pos = tag_starts[i];
 
-        // Assign parents to any text ranges that come before this tag
         while text_idx < text_ranges.len() && text_ranges[text_idx].start < tag_pos {
             text_ranges[text_idx].parent_tag = parent_stack.last().copied().unwrap_or(u32::MAX);
             text_idx += 1;
@@ -391,7 +390,12 @@ fn merge_chunks<'a>(input: &'a [u8], chunks: Vec<ChunkResult>) -> Result<XmlInde
         match tag_types[i] {
             TagType::Close => {
                 if depth > 0 { depth -= 1; }
-                parent_stack.pop();
+                if let Some(open_idx) = parent_stack.pop() {
+                    close_map[open_idx as usize] = i as u32;
+                    post_order[open_idx as usize] = post_counter;
+                }
+                post_order[i] = post_counter;
+                post_counter += 1;
                 depths.push(depth);
                 parents.push(parent_stack.last().copied().unwrap_or(u32::MAX));
             }
@@ -401,14 +405,22 @@ fn merge_chunks<'a>(input: &'a [u8], chunks: Vec<ChunkResult>) -> Result<XmlInde
                 parent_stack.push(i as u32);
                 depth += 1;
             }
-            TagType::SelfClose | TagType::Comment | TagType::CData | TagType::PI => {
+            TagType::SelfClose => {
+                close_map[i] = i as u32;
+                post_order[i] = post_counter;
+                post_counter += 1;
+                depths.push(depth);
+                parents.push(parent_stack.last().copied().unwrap_or(u32::MAX));
+            }
+            TagType::Comment | TagType::CData | TagType::PI => {
+                post_order[i] = post_counter;
+                post_counter += 1;
                 depths.push(depth);
                 parents.push(parent_stack.last().copied().unwrap_or(u32::MAX));
             }
         }
     }
 
-    // Handle any remaining text ranges after the last tag
     while text_idx < text_ranges.len() {
         text_ranges[text_idx].parent_tag = parent_stack.last().copied().unwrap_or(u32::MAX);
         text_idx += 1;
@@ -427,20 +439,15 @@ fn merge_chunks<'a>(input: &'a [u8], chunks: Vec<ChunkResult>) -> Result<XmlInde
         child_data: Vec::new(),
         text_child_offsets: Vec::new(),
         text_child_data: Vec::new(),
-        close_map: Vec::new(),
-        post_order: Vec::new(),
+        close_map,      // pre-computed in fused pass
+        post_order,     // pre-computed in fused pass
         name_ids: Vec::new(),
         name_table: Vec::new(),
         name_posting: Vec::new(),
     };
 
-    // NOTE: We intentionally skip build_indices() here. The depth/parent
-    // computation is the merge bottleneck, and build_indices() (CSR, close_map,
-    // post_order) adds significant sequential overhead. These are built lazily
-    // on first XPath evaluation via ensure_indices().
-    //
-    // For parse-only benchmarks, this gives the true parallel speedup.
-    // For parse+query, the indices are built once on first query.
+    // NOTE: Indices not built here — use ensure_indices() or build_indices()
+    // when needed. parse_parallel_indexed() does this automatically.
 
     Ok(index)
 }
