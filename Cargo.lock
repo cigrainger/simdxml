@@ -1999,6 +1999,7 @@ dependencies = [
 name = "simdxml-cli"
 version = "0.1.0"
 dependencies = [
+ "memmap2",
  "simdxml",
 ]
 

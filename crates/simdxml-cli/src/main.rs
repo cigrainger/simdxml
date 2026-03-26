@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
+use memmap2::Mmap;
 
 const USAGE: &str = "\
 sxq — fast XML/XPath query tool, powered by SIMD
@@ -132,11 +133,18 @@ fn run_query(
     let mut any_match = false;
     let mut json_all: Vec<Vec<String>> = Vec::new();
 
+    // Parallel parse threshold: files >1MB benefit from multi-threaded parsing
+    const PARALLEL_THRESHOLD: usize = 1_048_576;
+
     for source in &sources {
-        let data = source.read_bytes()?;
+        let data = source.open()?;
         let name = source.name();
 
-        let mut index = simdxml::parse(&data)?;
+        let mut index = if data.len() >= PARALLEL_THRESHOLD && threads > 1 {
+            simdxml::parallel::parse_parallel(&data, threads)?
+        } else {
+            simdxml::parse(&data)?
+        };
         let result = index.eval(xpath)?;
 
         match result {
@@ -247,12 +255,12 @@ fn run_batch(
     whitespace: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut names: Vec<&str> = Vec::with_capacity(sources.len());
-    let mut all_data: Vec<Vec<u8>> = Vec::with_capacity(sources.len());
+    let mut all_data: Vec<FileData> = Vec::with_capacity(sources.len());
     for source in sources {
-        all_data.push(source.read_bytes()?);
+        all_data.push(source.open()?);
         names.push(source.name());
     }
-    let doc_refs: Vec<&[u8]> = all_data.iter().map(|d| d.as_slice()).collect();
+    let doc_refs: Vec<&[u8]> = all_data.iter().map(|d| &**d).collect();
 
     if count {
         let counts = simdxml::batch::count_batch(&doc_refs, compiled)?;
@@ -302,14 +310,34 @@ fn run_batch(
 
 enum Source { File(String), Stdin }
 
-impl Source {
-    fn read_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+/// File data — either mmap'd or owned bytes from stdin.
+enum FileData {
+    Mmap(Mmap),
+    Owned(Vec<u8>),
+}
+
+impl std::ops::Deref for FileData {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
         match self {
-            Source::File(path) => Ok(fs::read(path)?),
+            FileData::Mmap(m) => m,
+            FileData::Owned(v) => v,
+        }
+    }
+}
+
+impl Source {
+    fn open(&self) -> Result<FileData, Box<dyn std::error::Error>> {
+        match self {
+            Source::File(path) => {
+                let file = fs::File::open(path)?;
+                let mmap = unsafe { Mmap::map(&file)? };
+                Ok(FileData::Mmap(mmap))
+            }
             Source::Stdin => {
                 let mut buf = Vec::new();
                 io::stdin().read_to_end(&mut buf)?;
-                Ok(buf)
+                Ok(FileData::Owned(buf))
             }
         }
     }
