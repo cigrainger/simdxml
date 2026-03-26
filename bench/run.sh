@@ -57,6 +57,7 @@ echo ""
 # ================================================================
 if [ -f "$PUBMED" ]; then
     echo ">>> 1. PubMed — //Article (195 MB, 30K articles)"
+    echo "   Note: xee excluded (fails on DTD declaration)"
     echo ""
     hyperfine --warmup $W --runs $R -i \
         --export-json "$EXPORT/01_pubmed.json" \
@@ -64,8 +65,7 @@ if [ -f "$PUBMED" ]; then
         -n "sxq -t1"    "$SXQ -t 1 -c '//Article' $PUBMED" \
         -n "pugixml"    "$PUGIXML '//Article' $PUBMED | wc -c" \
         -n "xmllint"    "xmllint --xpath '//Article' $PUBMED | wc -c" \
-        -n "xq"         "xq -x '//Article' $PUBMED | wc -c" \
-        -n "xee"        "xee xpath '//Article' $PUBMED | wc -c"
+        -n "xq"         "xq -x '//Article' $PUBMED | wc -c"
     echo ""
 fi
 
@@ -74,6 +74,7 @@ fi
 # ================================================================
 if [ -f "$DBLP" ]; then
     echo ">>> 2. DBLP — //article (5.1 GB, 4.2M articles)"
+    echo "   Note: xee excluded (fails on DTD declaration)"
     echo ""
     hyperfine --warmup 2 --runs 5 -i \
         --export-json "$EXPORT/02_dblp.json" \

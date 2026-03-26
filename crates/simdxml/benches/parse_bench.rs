@@ -658,6 +658,89 @@ fn bench_simd_predicates(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Large file benchmarks: PubMed (195MB) — out-of-cache, real-world
+// Requires: bench/corpora/pubmed26n0001.xml (run bench/download-corpora.sh)
+// ============================================================================
+
+fn bench_large_files(c: &mut Criterion) {
+    let corpora_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../bench/corpora");
+
+    // PubMed 195MB
+    let pubmed_path = format!("{}/pubmed26n0001.xml", corpora_dir);
+    if let Ok(data) = fs::read(&pubmed_path) {
+        let data_str = std::str::from_utf8(&data).unwrap_or("");
+
+        let mut group = c.benchmark_group("large/pubmed_195mb");
+        group.throughput(Throughput::Bytes(data.len() as u64));
+        group.sample_size(10);
+
+        // simdxml: sequential parse
+        group.bench_function("simdxml", |b| {
+            b.iter(|| { let _ = simdxml::parse(&data).unwrap(); });
+        });
+
+        // simdxml: parallel parse (4 threads)
+        group.bench_function("simdxml_parallel_4t", |b| {
+            b.iter(|| { let _ = simdxml::parallel::parse_parallel(&data, 4).unwrap(); });
+        });
+
+        // simdxml: parallel parse (8 threads)
+        group.bench_function("simdxml_parallel_8t", |b| {
+            b.iter(|| { let _ = simdxml::parallel::parse_parallel(&data, 8).unwrap(); });
+        });
+
+        // quick-xml: streaming pull parser
+        if !data_str.is_empty() {
+            group.bench_function("quick_xml", |b| {
+                b.iter(|| {
+                    let mut reader = quick_xml::Reader::from_str(data_str);
+                    loop {
+                        match reader.read_event() {
+                            Ok(quick_xml::events::Event::Eof) => break,
+                            Ok(_) => {}
+                            Err(e) => panic!("{}", e),
+                        }
+                    }
+                });
+            });
+        }
+
+        // roxmltree: full DOM parse
+        if !data_str.is_empty() {
+            if roxmltree::Document::parse(data_str).is_ok() {
+                group.bench_function("roxmltree", |b| {
+                    b.iter(|| { let _ = roxmltree::Document::parse(data_str).unwrap(); });
+                });
+            }
+        }
+
+        group.finish();
+
+        // End-to-end: parse + XPath on PubMed
+        let compiled = simdxml::CompiledXPath::compile("//Article").unwrap();
+        let mut group2 = c.benchmark_group("large/pubmed_e2e");
+        group2.throughput(Throughput::Bytes(data.len() as u64));
+        group2.sample_size(10);
+
+        group2.bench_function("simdxml_seq", |b| {
+            b.iter(|| {
+                let idx = simdxml::parse(&data).unwrap();
+                let _ = compiled.eval(&idx).unwrap();
+            });
+        });
+
+        group2.bench_function("simdxml_parallel_4t", |b| {
+            b.iter(|| {
+                let idx = simdxml::parallel::parse_parallel(&data, 4).unwrap();
+                let _ = compiled.eval(&idx).unwrap();
+            });
+        });
+
+        group2.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_parse_throughput,
@@ -673,6 +756,7 @@ criterion_group!(
     bench_batch,
     bench_simd_predicates,
     bench_parallel,
+    bench_large_files,
 );
 criterion_main!(benches);
 
