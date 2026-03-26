@@ -21,7 +21,7 @@ pub fn eval_batch_text(
     let mut all_results = Vec::with_capacity(docs.len());
 
     for &doc in docs {
-        let mut index = crate::parse(doc)?;
+        let index = crate::parse(doc)?;
         // Name index skipped: single-query-per-doc doesn't benefit from posting lists.
         // The XPath evaluator falls back to linear tag_name_eq scan.
         let texts: Vec<String> = xpath.eval_text(&index)?
@@ -41,7 +41,7 @@ pub fn eval_batch_text_lazy(
     let mut all_results = Vec::with_capacity(docs.len());
 
     for &doc in docs {
-        let mut index = match &interesting {
+        let index = match &interesting {
             Some(names) => crate::index::lazy::parse_for_query(doc, names)?,
             None => crate::parse(doc)?,
         };
@@ -83,7 +83,7 @@ pub fn eval_batch_text_bloom(
             }
         }
 
-        let mut index = match &interesting {
+        let index = match &interesting {
             Some(names) => crate::index::lazy::parse_for_query(doc, names)?,
             None => crate::parse(doc)?,
         };
@@ -105,7 +105,7 @@ pub fn count_batch(
     let mut counts = Vec::with_capacity(docs.len());
 
     for &doc in docs {
-        let mut index = crate::parse(doc)?;
+        let index = crate::parse(doc)?;
         // Name index skipped: single-query-per-doc doesn't benefit from posting lists.
         // The XPath evaluator falls back to linear tag_name_eq scan.
         let nodes = xpath.eval(&index)?;
@@ -164,7 +164,7 @@ pub fn eval_batch_parallel(
                 }
 
                 // Choose parse strategy based on document size
-                let mut index = if doc.len() >= LARGE_DOC_THRESHOLD {
+                let index = if doc.len() >= LARGE_DOC_THRESHOLD {
                     // Large doc: use intra-document parallelism
                     // Allocate threads proportionally (at least 2)
                     let doc_threads = (max_threads / doc_concurrency).max(2);

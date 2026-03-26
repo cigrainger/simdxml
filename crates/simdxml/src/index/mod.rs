@@ -113,6 +113,7 @@ impl<'a> NameInterner<'a> {
 
     /// Intern a name, returning its ID.
     /// Linear scan for <256 unique names, hash map above that.
+    /// On hash collision, falls back to linear scan for correctness.
     #[inline]
     pub fn intern(&mut self, name_bytes: &[u8], offset: u64, len: u16) -> u16 {
         if let Some(ref map) = self.map {
@@ -122,12 +123,21 @@ impl<'a> NameInterner<'a> {
                 if l == len && &self.input[off as usize..off as usize + l as usize] == name_bytes {
                     return id;
                 }
+                // Hash collision: bytes don't match. Fall back to linear scan.
+                for (i, &(off2, l2)) in self.table.iter().enumerate() {
+                    if l2 == len && &self.input[off2 as usize..off2 as usize + l2 as usize] == name_bytes {
+                        return i as u16;
+                    }
+                }
+                // Not found anywhere — insert new entry (don't overwrite map slot)
+                let new_id = self.table.len().min(u16::MAX as usize) as u16;
+                self.table.push((offset, len));
+                return new_id;
             }
-            // Fall through to insert
+            // No map entry for this hash — insert
             let id = self.table.len().min(u16::MAX as usize) as u16;
             self.table.push((offset, len));
-            // Re-borrow mutably
-            self.map.as_mut().unwrap().insert(Self::fnv1a(name_bytes), id);
+            self.map.as_mut().unwrap().insert(hash, id);
             return id;
         }
 

@@ -9,8 +9,16 @@
 //! - x86_64: AVX2 (256-bit, 32 bytes/vector) — future
 //! - Fallback: scalar (current memchr-based parser)
 
+pub(crate) mod scalar;
+
 #[cfg(target_arch = "aarch64")]
 pub mod neon;
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod sse42;
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod avx2;
 
 /// Structural positions extracted from SIMD classification.
 /// Each u64 is a bitmask over a 64-byte chunk of input.
@@ -20,6 +28,7 @@ pub struct StructuralIndex {
     /// Positions of '>' characters (not inside quotes)
     pub gt_bits: Vec<u64>,
     /// Total input length
+    #[allow(dead_code)]
     pub len: usize,
 }
 
@@ -71,36 +80,18 @@ pub fn classify_structural(input: &[u8]) -> StructuralIndex {
         return neon::classify_neon(input);
     }
 
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
     {
-        classify_scalar(input)
-    }
-}
-
-/// Scalar fallback: byte-at-a-time classification.
-#[cfg(not(target_arch = "aarch64"))]
-fn classify_scalar(input: &[u8]) -> StructuralIndex {
-    let num_chunks = (input.len() + 63) / 64;
-    let mut lt_bits = vec![0u64; num_chunks];
-    let mut gt_bits = vec![0u64; num_chunks];
-    let mut in_quote: u8 = 0; // 0 = not in quote, b'"' or b'\'' = in that quote
-
-    for (i, &byte) in input.iter().enumerate() {
-        let chunk = i / 64;
-        let bit = i % 64;
-        if in_quote != 0 {
-            if byte == in_quote {
-                in_quote = 0;
-            }
-            continue;
+        if is_x86_feature_detected!("avx2") {
+            return avx2::classify_avx2(input);
         }
-        match byte {
-            b'<' => lt_bits[chunk] |= 1u64 << bit,
-            b'>' => gt_bits[chunk] |= 1u64 << bit,
-            b'"' | b'\'' => in_quote = byte,
-            _ => {}
-        }
+        // SSE4.2 is baseline for x86_64, but check anyway
+        return sse42::classify_sse42(input);
     }
 
-    StructuralIndex { lt_bits, gt_bits, len: input.len() }
+    // Universal scalar fallback for other architectures
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        scalar::classify_scalar(input)
+    }
 }
