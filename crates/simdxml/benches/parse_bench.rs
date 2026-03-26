@@ -339,6 +339,8 @@ fn bench_realworld(c: &mut Criterion) {
         "tiger.svg",        // 69 KB classic benchmark SVG
         "maven-pom.xml",    // 46 KB real config
         "cerknicko-jezero.gpx", // 36 KB GPS data
+        "patent-ep.xml",    // 12 KB real EP patent (attribute-dense)
+        "patent-us.xml",    // 10 KB real US patent (attribute-dense)
     ];
 
     for filename in &files {

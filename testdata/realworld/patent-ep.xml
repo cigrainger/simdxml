@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<patent-document ucid="EP-3245378-B1" country="EP" doc-number="3245378" kind="B1" date="20210407" lang="EN" family-id="55174862">
+<bibliographic-data>
+<publication-reference ucid="EP-3245378-B1"><document-id><country>EP</country><doc-number>3245378</doc-number><kind>B1</kind><date>20210407</date></document-id></publication-reference>
+<application-reference ucid="EP-20150821443-A"><document-id><country>EP</country><doc-number>15821443</doc-number><date>20151218</date></document-id></application-reference>
+<priority-claims>
+<priority-claim ucid="DE-102015100279-A" sequence="1"><document-id><country>DE</country><doc-number>102015100279</doc-number><date>20150109</date></document-id></priority-claim>
+<priority-claim ucid="WO-2016EP01856-W" sequence="2"><document-id><country>WO</country><doc-number>2016EP01856</doc-number><date>20151218</date></document-id></priority-claim>
+</priority-claims>
+<technical-data>
+<classifications-ipcr><classification-ipcr>F02M  35/10        20060101AFI20210303BHEP</classification-ipcr><classification-ipcr>F02M  35/024       20060101ALI20210303BHEP</classification-ipcr><classification-ipcr>F02M  35/104       20060101ALI20210303BHEP</classification-ipcr></classifications-ipcr>
+<classifications-cpc><classification-cpc scheme="CPCI">F02M  35/10        20130101</classification-cpc><classification-cpc scheme="CPCI">F02M  35/024       20130101</classification-cpc><classification-cpc scheme="CPCI">F02M  35/104       20130101</classification-cpc><classification-cpc scheme="CPCA">F02M  35/1065      20130101</classification-cpc></classifications-cpc>
+<invention-title lang="EN">AIR FILTER ELEMENT, IN PARTICULAR FOR GAS FILTRATION</invention-title>
+<invention-title lang="DE">LUFTFILTERELEMENT, INSBESONDERE ZUR GASFILTRATION</invention-title>
+<invention-title lang="FR">ELEMENT DE FILTRE A AIR, EN PARTICULIER POUR LA FILTRATION DE GAZ</invention-title>
+<designated-states><designated-state country="AL"/><designated-state country="AT"/><designated-state country="BE"/><designated-state country="BG"/><designated-state country="CH"/><designated-state country="CY"/><designated-state country="CZ"/><designated-state country="DE"/><designated-state country="DK"/><designated-state country="EE"/><designated-state country="ES"/><designated-state country="FI"/><designated-state country="FR"/><designated-state country="GB"/><designated-state country="GR"/><designated-state country="HR"/><designated-state country="HU"/><designated-state country="IE"/><designated-state country="IS"/><designated-state country="IT"/><designated-state country="LI"/><designated-state country="LT"/><designated-state country="LU"/><designated-state country="LV"/><designated-state country="MC"/><designated-state country="MK"/><designated-state country="MT"/><designated-state country="NL"/><designated-state country="NO"/><designated-state country="PL"/><designated-state country="PT"/><designated-state country="RO"/><designated-state country="RS"/><designated-state country="SE"/><designated-state country="SI"/><designated-state country="SK"/><designated-state country="SM"/><designated-state country="TR"/></designated-states>
+<citations><patent-citations>
+<patcit ucid="US-20140130469-A1"><document-id><country>US</country><doc-number>20140130469</doc-number><kind>A1</kind><date>20140515</date></document-id></patcit>
+<patcit ucid="DE-102012019279-A1"><document-id><country>DE</country><doc-number>102012019279</doc-number><kind>A1</kind><date>20140403</date></document-id></patcit>
+<patcit ucid="EP-2399665-A1"><document-id><country>EP</country><doc-number>2399665</doc-number><kind>A1</kind><date>20111228</date></document-id></patcit>
+<patcit ucid="WO-2014044411-A1"><document-id><country>WO</country><doc-number>2014044411</doc-number><kind>A1</kind><date>20140327</date></document-id></patcit>
+<patcit ucid="DE-102013014459-A1"><document-id><country>DE</country><doc-number>102013014459</doc-number><kind>A1</kind><date>20150305</date></document-id></patcit>
+<patcit ucid="US-6398832-B1"><document-id><country>US</country><doc-number>6398832</doc-number><kind>B1</kind><date>20020604</date></document-id></patcit>
+</patent-citations></citations>
+</technical-data>
+<parties>
+<applicants><applicant sequence="1"><addressbook><last-name>MANN+HUMMEL GmbH</last-name><address><city>Ludwigsburg</city><country>DE</country></address></addressbook></applicant></applicants>
+<inventors>
+<inventor sequence="1"><addressbook><last-name>SCHMIDT</last-name><first-name>Markus</first-name><address><city>Besigheim</city><country>DE</country></address></addressbook></inventor>
+<inventor sequence="2"><addressbook><last-name>JAEGER</last-name><first-name>Martin</first-name><address><city>Vaihingen an der Enz</city><country>DE</country></address></addressbook></inventor>
+<inventor sequence="3"><addressbook><last-name>WOLFF</last-name><first-name>Andreas</first-name><address><city>Stuttgart</city><country>DE</country></address></addressbook></inventor>
+</inventors>
+<agents>
+<agent sequence="1" rep-type="agent"><addressbook><last-name>Vossius &amp; Partner Patentanwaelte Rechtsanwaelte mbB</last-name><address><city>Munich</city><country>DE</country></address></addressbook></agent>
+</agents>
+</parties>
+</bibliographic-data>
+<abstract lang="EN"><p>An air filter element (10) in particular for gas filtration, comprising a filter bellows (12) having a first end face (14) and an opposite second end face (16), with a first end plate (18) on the first end face and a second end plate (20) on the second end face, the filter bellows (12) comprising an inner tube (22) and an outer tube (24), wherein the first end plate (18) is configured as an open end plate, and the second end plate (20) is configured as a closed end plate, and wherein the first end plate (18) comprises a sealing element (26) for sealing the air filter element (10) relative to a filter housing (28).</p></abstract>
+<description lang="EN">
+<heading>TECHNICAL FIELD</heading>
+<p>The invention relates to an air filter element, in particular for gas filtration, comprising a filter bellows having a first end face and an opposite second end face. The invention further relates to a filter system comprising such an air filter element.</p>
+<heading>PRIOR ART</heading>
+<p>Air filter elements for gas filtration are known in a variety of embodiments. They generally serve to filter particles and other contaminants from an air flow. In combustion engines, the filtered air is supplied to the engine for combustion. The quality of filtration directly affects engine performance and longevity.</p>
+<p>Cylindrical filter elements with pleated filter media arranged in an annular configuration are frequently used. Such filter elements typically have two end plates, one of which is open for the passage of filtered air and one of which is closed. The filter media may be supported by an inner tube and surrounded by an outer tube.</p>
+<p>A particular challenge in the design of such filter elements is the sealing between the filter element and the filter housing. Inadequate sealing may allow unfiltered air to bypass the filter media, compromising the effectiveness of the filtration. In addition, the sealing should allow easy insertion and removal of the filter element during maintenance.</p>
+<heading>DESCRIPTION OF THE INVENTION</heading>
+<p>The object of the invention is to provide an air filter element which ensures reliable sealing while allowing simple installation and removal. This object is achieved by the features of the independent claims.</p>
+<p>According to the invention, the air filter element comprises a filter bellows having a first end face and an opposite second end face, with a first end plate on the first end face and a second end plate on the second end face. The filter bellows comprises an inner tube and an outer tube. The first end plate is configured as an open end plate, and the second end plate is configured as a closed end plate. The first end plate comprises a sealing element for sealing the air filter element relative to a filter housing.</p>
+<p>The sealing element is arranged on a radially outer edge region of the first end plate. The sealing element may be a radial seal or an axial seal. Preferably, the sealing element is formed integrally with the first end plate, for example by injection molding the end plate together with the sealing element from a thermoplastic elastomer.</p>
+<p>In one embodiment, the inner tube comprises a plurality of openings arranged along its circumference. These openings allow the filtered air to flow from the filter bellows through the inner tube to the open end plate. The size and distribution of the openings may be optimized to provide uniform flow distribution across the filter media.</p>
+<p>The outer tube may be perforated or formed as a mesh structure to allow unfiltered air to enter the filter bellows from the outside. In a preferred embodiment, the outer tube is formed from a perforated metal sheet or a plastic mesh. The outer tube provides mechanical stability to the filter bellows and protects the filter media from damage.</p>
+</description>
+<claims lang="EN">
+<claim id="CLM-00001" num="00001"><claim-text>1. An air filter element (10) for gas filtration, comprising: a filter bellows (12) having a first end face (14) and an opposite second end face (16); a first end plate (18) on the first end face (14); a second end plate (20) on the second end face (16); the filter bellows (12) comprising an inner tube (22) and an outer tube (24); wherein the first end plate (18) is configured as an open end plate, and the second end plate (20) is configured as a closed end plate; and wherein the first end plate (18) comprises a sealing element (26) for sealing the air filter element (10) relative to a filter housing (28), characterized in that the sealing element (26) is arranged on a radially outer edge region of the first end plate (18) and is formed integrally with the first end plate (18).</claim-text></claim>
+<claim id="CLM-00002" num="00002"><claim-text>2. The air filter element according to <claim-ref idref="CLM-00001">claim 1</claim-ref>, wherein the sealing element (26) is a radial seal which is configured to seal against an inner wall of the filter housing (28).</claim-text></claim>
+<claim id="CLM-00003" num="00003"><claim-text>3. The air filter element according to <claim-ref idref="CLM-00001">claim 1</claim-ref> or <claim-ref idref="CLM-00002">claim 2</claim-ref>, wherein the first end plate (18) and the sealing element (26) are formed from a thermoplastic elastomer by injection molding.</claim-text></claim>
+<claim id="CLM-00004" num="00004"><claim-text>4. The air filter element according to any of <claim-ref idref="CLM-00001">claims 1</claim-ref> to <claim-ref idref="CLM-00003">3</claim-ref>, wherein the inner tube (22) comprises a plurality of openings arranged along its circumference for allowing filtered air to flow from the filter bellows (12) through the inner tube (22).</claim-text></claim>
+<claim id="CLM-00005" num="00005"><claim-text>5. The air filter element according to any of <claim-ref idref="CLM-00001">claims 1</claim-ref> to <claim-ref idref="CLM-00004">4</claim-ref>, wherein the outer tube (24) is formed from a perforated metal sheet or a plastic mesh.</claim-text></claim>
+<claim id="CLM-00006" num="00006"><claim-text>6. A filter system comprising: a filter housing (28); and an air filter element (10) according to any of <claim-ref idref="CLM-00001">claims 1</claim-ref> to <claim-ref idref="CLM-00005">5</claim-ref>, wherein the air filter element (10) is received in the filter housing (28) and the sealing element (26) seals against the filter housing (28).</claim-text></claim>
+</claims>
+</patent-document>
