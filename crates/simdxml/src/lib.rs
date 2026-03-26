@@ -225,6 +225,11 @@ impl<'a> XmlIndex<'a> {
     /// `string()`, `count()`, `boolean()`, arithmetic, comparisons, etc.
     pub fn eval(&mut self, xpath_expr: &str) -> Result<xpath::XPathResult> {
         let expr = xpath::parse_xpath(xpath_expr)?;
+        // Build CSR indices if the query has multi-step paths (child axis needs them).
+        // Single-step descendant queries (//name) use the fused path and don't need CSR.
+        if Self::needs_indices(&expr) {
+            self.ensure_indices();
+        }
         // Handle relative paths with doc context
         match &expr {
             xpath::XPathExpr::LocationPath(ref path) if !path.absolute => {
@@ -334,6 +339,18 @@ impl<'a> XmlIndex<'a> {
                 Ok(result)
             }
             _ => xpath::evaluate(self, expr),
+        }
+    }
+
+    /// Check if an expression needs CSR indices (multi-step paths use child axis).
+    fn needs_indices(expr: &xpath::XPathExpr) -> bool {
+        match expr {
+            xpath::XPathExpr::LocationPath(path) => path.steps.len() > 1,
+            xpath::XPathExpr::Union(exprs) => exprs.iter().any(Self::needs_indices),
+            xpath::XPathExpr::FilterPath(inner, _) => Self::needs_indices(inner),
+            xpath::XPathExpr::GlobalFilter(inner, _) => Self::needs_indices(inner),
+            xpath::XPathExpr::FunctionCall(_, args) => args.iter().any(Self::needs_indices),
+            _ => false,
         }
     }
 
