@@ -239,12 +239,6 @@ impl<'a> XmlIndex<'a> {
             && self.post_order[ancestor_idx] > self.post_order[descendant_idx]
     }
 
-    /// O(1) descendant check. Returns true if `node_idx` is a descendant of `ancestor_idx`.
-    #[inline]
-    pub(crate) fn is_descendant_of(&self, node_idx: usize, ancestor_idx: usize) -> bool {
-        self.is_ancestor(ancestor_idx, node_idx)
-    }
-
     /// Build inverted name index for repeated query workloads.
     /// Call this once before evaluating many XPath expressions on the same document.
     pub fn build_name_index(&mut self) {
@@ -321,6 +315,12 @@ impl<'a> XmlIndex<'a> {
         let bytes = &self.input[offset as usize..(offset + len as u32) as usize];
         // Safety: XML input is validated during parsing; tag names are always valid UTF-8.
         unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
+    /// Get the text content of a text range by its index.
+    #[inline]
+    pub fn text_by_index(&self, text_idx: usize) -> &'a str {
+        self.text_content(&self.text_ranges[text_idx])
     }
 
     /// Get the text content of a text range.

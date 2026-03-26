@@ -110,7 +110,8 @@ impl<'a> XmlIndex<'a> {
     ///
     /// Handles all XPath 1.0 expression types: location paths, functions like
     /// `string()`, `count()`, `boolean()`, arithmetic, comparisons, etc.
-    pub fn eval(&self, xpath_expr: &str) -> Result<xpath::XPathResult> {
+    pub fn eval(&mut self, xpath_expr: &str) -> Result<xpath::XPathResult> {
+        self.ensure_indices();
         let expr = xpath::parse_xpath(xpath_expr)?;
         // Handle relative paths with doc context
         match &expr {

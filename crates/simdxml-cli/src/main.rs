@@ -136,7 +136,7 @@ fn run_query(
         let data = source.read_bytes()?;
         let name = source.name();
 
-        let index = simdxml::parse(&data)?;
+        let mut index = simdxml::parse(&data)?;
         let result = index.eval(xpath)?;
 
         match result {
@@ -158,7 +158,13 @@ fn run_query(
                 }
 
                 if raw {
-                    let fragments = index.xpath_raw(xpath)?;
+                    // Extract raw XML directly from already-evaluated nodes
+                    let fragments: Vec<&str> = nodes.iter().map(|node| match *node {
+                        simdxml::xpath::XPathNode::Element(idx) => index.raw_xml(idx),
+                        simdxml::xpath::XPathNode::Text(idx) => index.text_by_index(idx),
+                        simdxml::xpath::XPathNode::Attribute(tag_idx, _)
+                        | simdxml::xpath::XPathNode::Namespace(tag_idx, _) => index.raw_tag(tag_idx),
+                    }).collect();
                     let fragments: Vec<&str> = if whitespace { fragments }
                         else { fragments.into_iter().filter(|s| !s.trim().is_empty()).collect() };
                     if !fragments.is_empty() {
@@ -169,7 +175,8 @@ fn run_query(
                     continue;
                 }
 
-                let texts = index.xpath_text(xpath)?;
+                // Extract text directly from already-evaluated nodes
+                let texts = simdxml::xpath::extract_text(&index, nodes)?;
                 let texts: Vec<&str> = if whitespace { texts }
                     else { texts.into_iter().filter(|s| !s.trim().is_empty()).collect() };
 

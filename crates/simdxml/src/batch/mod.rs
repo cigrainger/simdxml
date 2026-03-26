@@ -145,7 +145,7 @@ pub fn eval_batch_parallel(
         // For large docs, each gets intra-document parallelism
         let doc_concurrency = max_threads.min(docs.len());
 
-        let handles: Vec<_> = docs.iter().enumerate().map(|(i, &doc)| {
+        let handles: Vec<_> = docs.iter().enumerate().map(|(_i, &doc)| {
             let interesting = &interesting;
             let target_names = &target_names;
 

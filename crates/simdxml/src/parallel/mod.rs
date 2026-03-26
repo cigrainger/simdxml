@@ -17,7 +17,7 @@
 //! 5. Compute depths and parents in one sequential pass
 //! 6. Build CSR indices
 
-use crate::error::{Result, SimdXmlError};
+use crate::error::Result;
 use crate::index::{TagType, TextRange, XmlIndex};
 use memchr::memchr;
 
@@ -370,7 +370,7 @@ fn merge_chunks<'a>(input: &'a [u8], chunks: Vec<ChunkResult>) -> Result<XmlInde
     // === Fused pass: depth, parents, close_map, post_order, text parents ===
     // Pre-allocated arrays with direct indexing (no Vec::push bounds checks).
     // Text range parents assigned via interleaved linear scan (O(n+t), cache-friendly).
-    let n = tag_types.len();
+    let _n = tag_types.len();
 
     // === Fused pass: depth, parents, close_map, post_order, text parents ===
     // Uses fixed-size array stack (no heap, no bounds checks).
@@ -438,7 +438,7 @@ fn merge_chunks<'a>(input: &'a [u8], chunks: Vec<ChunkResult>) -> Result<XmlInde
         text_idx += 1;
     }
 
-    let mut index = XmlIndex {
+    let index = XmlIndex {
         input,
         tag_starts,
         tag_ends,

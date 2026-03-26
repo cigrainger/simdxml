@@ -980,7 +980,6 @@ fn eval_predicate_value(
                 Ok(XPathValue::String(String::new()))
             }
         }
-        _ => Ok(XPathValue::String(String::new())),
     }
 }
 
