@@ -1,68 +1,123 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Benchmark sxq against other XML/XPath CLI tools.
+# sxq benchmark suite.
 #
-# All benchmarks pipe output to `wc -c` to force tools to actually produce
-# output while keeping terminal rendering out of the measurement.
+# Measures end-to-end performance: file I/O + parse + XPath eval + output.
+# All tools pipe output to wc -c to force real output without terminal overhead.
+#
+# Requires: hyperfine, xmllint, xmlstarlet, xq, xidel, xee
+# Plus: bench/pugixml-xpath (compiled), target/release/sxq (built)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 SXQ="$ROOT/target/release/sxq"
 PUGIXML="$SCRIPT_DIR/pugixml-xpath"
 
 cargo build --release -p simdxml-cli --manifest-path="$ROOT/Cargo.toml" 2>/dev/null
 
 PATENT_US="$ROOT/testdata/realworld/patent-us.xml"
-HUGE="$ROOT/testdata/realworld/huge.xml"
-GIGANTIC="$ROOT/testdata/realworld/gigantic.svg"
 ATTR_HEAVY="$ROOT/testdata/bench/attrheavy_xlarge.xml"
+CORPUS="$ROOT/testdata/bench/corpus"
+PUBMED="$ROOT/bench/corpora/pubmed26n0001.xml"
+DBLP="$ROOT/bench/corpora/dblp.xml"
 
-W=5   # warmup
-R=30  # runs
-EXPORT_DIR="$SCRIPT_DIR/results"
-mkdir -p "$EXPORT_DIR"
+W=5; R=20
+EXPORT="$SCRIPT_DIR/results"
+mkdir -p "$EXPORT"
 
 echo "============================================"
 echo "  sxq benchmark suite"
 echo "============================================"
 echo ""
-echo "Files:"
-for f in "$PATENT_US" "$HUGE" "$GIGANTIC" "$ATTR_HEAVY"; do
-    sz=$(wc -c < "$f" | tr -d ' ')
-    echo "  $(basename "$f"): $(( sz / 1024 )) KB"
+
+# Show file sizes
+for label_file in \
+    "patent-us.xml:$PATENT_US" \
+    "attrheavy_xlarge.xml:$ATTR_HEAVY" \
+    "corpus (500 patents):$CORPUS" \
+    "pubmed26n0001.xml:$PUBMED" \
+    "dblp.xml:$DBLP"; do
+    label="${label_file%%:*}"
+    f="${label_file#*:}"
+    if [ -d "$f" ]; then
+        n=$(ls "$f"/*.xml 2>/dev/null | wc -l | tr -d ' ')
+        echo "  $label: $n files"
+    elif [ -f "$f" ]; then
+        sz=$(ls -lh "$f" | awk '{print $5}')
+        echo "  $label: $sz"
+    else
+        echo "  $label: NOT FOUND"
+    fi
 done
 echo ""
-echo "Output piped to wc -c (forces output, avoids terminal overhead)."
-echo ""
 
 # ================================================================
-# 1. Small file, simple query (86 KB patent)
+# 1. PubMed 195MB — the real-world headline benchmark
 # ================================================================
-echo ">>> 1. //invention-title — patent-us.xml (86 KB)"
-echo ""
+if [ -f "$PUBMED" ]; then
+    echo ">>> 1. PubMed — //Article (195 MB, 30K articles)"
+    echo ""
+    hyperfine --warmup $W --runs $R -i \
+        --export-json "$EXPORT/01_pubmed.json" \
+        -n "sxq"        "$SXQ -c '//Article' $PUBMED" \
+        -n "sxq -t1"    "$SXQ -t 1 -c '//Article' $PUBMED" \
+        -n "pugixml"    "$PUGIXML '//Article' $PUBMED | wc -c" \
+        -n "xmllint"    "xmllint --xpath '//Article' $PUBMED | wc -c" \
+        -n "xq"         "xq -x '//Article' $PUBMED | wc -c" \
+        -n "xee"        "xee xpath '//Article' $PUBMED | wc -c"
+    echo ""
+fi
 
+# ================================================================
+# 2. DBLP 5.1GB — stress test, largest file
+# ================================================================
+if [ -f "$DBLP" ]; then
+    echo ">>> 2. DBLP — //article (5.1 GB, 4.2M articles)"
+    echo ""
+    hyperfine --warmup 2 --runs 5 -i \
+        --export-json "$EXPORT/02_dblp.json" \
+        -n "sxq"        "$SXQ -c '//article' $DBLP" \
+        -n "pugixml"    "$PUGIXML '//article' $DBLP | wc -c"
+    echo ""
+fi
+
+# ================================================================
+# 3. Attribute-heavy 10MB — SIMD sweet spot
+# ================================================================
+echo ">>> 3. Attribute-heavy — //record (10 MB, 70K self-closing records)"
+echo ""
 hyperfine --warmup $W --runs $R -i \
-    --export-json "$EXPORT_DIR/01_small_simple.json" \
-    -n "sxq"        "$SXQ '//invention-title' $PATENT_US | wc -c" \
-    -n "pugixml"    "$PUGIXML '//invention-title' $PATENT_US | wc -c" \
-    -n "xmllint"    "xmllint --xpath '//invention-title/text()' $PATENT_US | wc -c" \
-    -n "xmlstarlet" "xmlstarlet sel -t -v '//invention-title' $PATENT_US | wc -c" \
-    -n "xq"         "xq -x '//invention-title' $PATENT_US | wc -c" \
-    -n "xidel"      "xidel $PATENT_US -e '//invention-title' --silent | wc -c" \
-    -n "xee"        "xee xpath '//invention-title' $PATENT_US | wc -c"
-
+    --export-json "$EXPORT/03_attr_heavy.json" \
+    -n "sxq"        "$SXQ -r '//record' $ATTR_HEAVY | wc -c" \
+    -n "pugixml"    "$PUGIXML '//record' $ATTR_HEAVY | wc -c" \
+    -n "xmllint"    "xmllint --xpath '//record' $ATTR_HEAVY | wc -c" \
+    -n "xmlstarlet" "xmlstarlet sel -t -c '//record' $ATTR_HEAVY | wc -c" \
+    -n "xq"         "xq -x '//record' $ATTR_HEAVY | wc -c" \
+    -n "xidel"      "xidel $ATTR_HEAVY -e '//record' --silent | wc -c" \
+    -n "xee"        "xee xpath '//record' $ATTR_HEAVY | wc -c"
 echo ""
 
 # ================================================================
-# 2. Small file, many matches (86 KB patent, 31 claim-text hits)
+# 4. Patent corpus — 500 files, single invocation
 # ================================================================
-echo ">>> 2. //claim-text — patent-us.xml (86 KB, 31 hits)"
-echo ""
+if [ -d "$CORPUS" ]; then
+    echo ">>> 4. Patent corpus — //claim (500 files, 39 MB total)"
+    echo ""
+    hyperfine --warmup $W --runs $R -i \
+        --export-json "$EXPORT/04_corpus.json" \
+        -n "sxq"        "$SXQ -c '//claim' $CORPUS/*.xml" \
+        -n "pugixml"    "$PUGIXML '//claim' $CORPUS/*.xml | wc -c"
+    echo ""
+fi
 
+# ================================================================
+# 5. Small file — all tools (startup-dominated, for reference)
+# ================================================================
+echo ">>> 5. Single patent — //claim-text (86 KB, baseline)"
+echo ""
 hyperfine --warmup $W --runs $R -i \
-    --export-json "$EXPORT_DIR/02_small_many.json" \
+    --export-json "$EXPORT/05_small.json" \
     -n "sxq"        "$SXQ '//claim-text' $PATENT_US | wc -c" \
     -n "pugixml"    "$PUGIXML '//claim-text' $PATENT_US | wc -c" \
     -n "xmllint"    "xmllint --xpath '//claim-text' $PATENT_US | wc -c" \
@@ -70,82 +125,8 @@ hyperfine --warmup $W --runs $R -i \
     -n "xq"         "xq -x '//claim-text' $PATENT_US | wc -c" \
     -n "xidel"      "xidel $PATENT_US -e '//claim-text' --silent | wc -c" \
     -n "xee"        "xee xpath '//claim-text' $PATENT_US | wc -c"
-
 echo ""
 
-# ================================================================
-# 3. Large SVG (1.3 MB, 80 path elements — self-closing, no text)
-# ================================================================
-echo ">>> 3. //path — gigantic.svg (1.3 MB, 80 hits)"
-echo "   Note: path elements are self-closing (attribute-heavy, no text content)"
-echo ""
-
-hyperfine --warmup $W --runs $R -i \
-    --export-json "$EXPORT_DIR/03_large_svg.json" \
-    -n "sxq -r"     "$SXQ -r '//path' $GIGANTIC | wc -c" \
-    -n "pugixml"    "$PUGIXML '//path' $GIGANTIC | wc -c" \
-    -n "xmllint"    "xmllint --xpath '//path' $GIGANTIC | wc -c" \
-    -n "xmlstarlet" "xmlstarlet sel -t -c '//path' $GIGANTIC | wc -c" \
-    -n "xq"         "xq -x '//path' $GIGANTIC | wc -c" \
-    -n "xidel"      "xidel $GIGANTIC -e '//path' --silent | wc -c" \
-    -n "xee"        "xee xpath '//path' $GIGANTIC | wc -c"
-
-echo ""
-
-# ================================================================
-# 4. Huge namespaced XML (835 KB, 425 keyword elements)
-# xmllint (silent 0 results), xmlstarlet (error), xee (error)
-# cannot handle namespace prefixes without registration.
-# ================================================================
-echo ">>> 4. //gmd:keyword — huge.xml (835 KB, 425 hits)"
-echo "   xmllint/xmlstarlet/xee excluded: fail on namespace prefixes."
-echo ""
-
-hyperfine --warmup $W --runs $R -i \
-    --export-json "$EXPORT_DIR/04_huge_ns.json" \
-    -n "sxq"     "$SXQ '//gmd:keyword' $HUGE | wc -c" \
-    -n "pugixml" "$PUGIXML '//gmd:keyword' $HUGE | wc -c" \
-    -n "xq"      "xq -x '//gmd:keyword' $HUGE | wc -c" \
-    -n "xidel"   "xidel $HUGE -e '//gmd:keyword' --silent | wc -c"
-
-echo ""
-
-# ================================================================
-# 5. Attribute-heavy XML (10 MB, 70K self-closing records)
-# The SIMD sweet spot: lots of quoted attribute values to scan.
-# Uses -r/raw mode since elements have no text content.
-# ================================================================
-ATTR_KB=$(( $(wc -c < "$ATTR_HEAVY" | tr -d ' ') / 1024 ))
-echo ">>> 5. //record — attrheavy_xlarge.xml (${ATTR_KB} KB, 70K hits)"
-echo "   Attribute-heavy: self-closing <record id=.. a0=.. a1=.. .../>"
-echo ""
-
-hyperfine --warmup $W --runs $R -i \
-    --export-json "$EXPORT_DIR/05_attr_heavy.json" \
-    -n "sxq -r"     "$SXQ -r '//record' $ATTR_HEAVY | wc -c" \
-    -n "pugixml"    "$PUGIXML '//record' $ATTR_HEAVY | wc -c" \
-    -n "xmllint"    "xmllint --xpath '//record' $ATTR_HEAVY | wc -c" \
-    -n "xmlstarlet" "xmlstarlet sel -t -c '//record' $ATTR_HEAVY | wc -c" \
-    -n "xq"         "xq -x '//record' $ATTR_HEAVY | wc -c" \
-    -n "xidel"      "xidel $ATTR_HEAVY -e '//record' --silent | wc -c" \
-    -n "xee"        "xee xpath '//record' $ATTR_HEAVY | wc -c"
-
-echo ""
-
-# ================================================================
-# 6. Scalar expression — count()
-# ================================================================
-echo ">>> 6. count(//claim) — patent-us.xml (86 KB)"
-echo ""
-
-hyperfine --warmup $W --runs $R -i \
-    --export-json "$EXPORT_DIR/06_count.json" \
-    -n "sxq"     "$SXQ 'count(//claim)' $PATENT_US | wc -c" \
-    -n "xmllint" "xmllint --xpath 'count(//claim)' $PATENT_US | wc -c" \
-    -n "xidel"   "xidel $PATENT_US -e 'count(//claim)' --silent | wc -c" \
-    -n "xee"     "xee xpath 'count(//claim)' $PATENT_US | wc -c"
-
-echo ""
 echo "============================================"
-echo "  Done. Results in $EXPORT_DIR/"
+echo "  Done. Results in $EXPORT/"
 echo "============================================"
