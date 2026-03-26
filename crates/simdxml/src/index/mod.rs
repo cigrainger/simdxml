@@ -95,18 +95,43 @@ impl TagType {
 /// Zero heap allocation per intern call — just byte comparison.
 pub(crate) struct NameInterner<'a> {
     input: &'a [u8],
-    table: Vec<(u32, u16)>, // (offset, len) for each interned name
+    table: Vec<(u32, u16)>,
+    map: Option<std::collections::HashMap<u64, u16>>,
 }
 
 impl<'a> NameInterner<'a> {
     pub fn new(input: &'a [u8]) -> Self {
-        Self { input, table: Vec::with_capacity(64) }
+        Self { input, table: Vec::with_capacity(64), map: None }
     }
 
-    /// Intern a name, returning its ID. Zero allocation — compares bytes directly.
+    #[inline]
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for &b in bytes { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); }
+        h
+    }
+
+    /// Intern a name, returning its ID.
+    /// Linear scan for <256 unique names, hash map above that.
     #[inline]
     pub fn intern(&mut self, name_bytes: &[u8], offset: u32, len: u16) -> u16 {
-        // Linear scan — fast for typical XML with <200 unique tag names
+        if let Some(ref map) = self.map {
+            let hash = Self::fnv1a(name_bytes);
+            if let Some(&id) = map.get(&hash) {
+                let (off, l) = self.table[id as usize];
+                if l == len && &self.input[off as usize..off as usize + l as usize] == name_bytes {
+                    return id;
+                }
+            }
+            // Fall through to insert
+            let id = self.table.len().min(u16::MAX as usize) as u16;
+            self.table.push((offset, len));
+            // Re-borrow mutably
+            self.map.as_mut().unwrap().insert(Self::fnv1a(name_bytes), id);
+            return id;
+        }
+
+        // Linear scan for small tables
         for (id, &(off, l)) in self.table.iter().enumerate() {
             if l == len && &self.input[off as usize..off as usize + l as usize] == name_bytes {
                 return id as u16;
@@ -114,6 +139,16 @@ impl<'a> NameInterner<'a> {
         }
         let id = self.table.len() as u16;
         self.table.push((offset, len));
+
+        // Switch to hash map at threshold
+        if self.table.len() == 256 {
+            let mut map = std::collections::HashMap::with_capacity(512);
+            for (i, &(off, l)) in self.table.iter().enumerate() {
+                let bytes = &self.input[off as usize..off as usize + l as usize];
+                map.insert(Self::fnv1a(bytes), i as u16);
+            }
+            self.map = Some(map);
+        }
         id
     }
 
