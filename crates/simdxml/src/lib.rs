@@ -107,8 +107,10 @@ pub fn load_or_parse(xml_path: impl AsRef<std::path::Path>) -> Result<OwnedXmlIn
 impl<'a> XmlIndex<'a> {
     /// Evaluate an XPath expression and return text content of matches.
     ///
-    /// For relative paths (e.g., `s`, `chapter/para`), evaluation starts from
-    /// the document element, matching libxml2 behavior.
+    /// Evaluate an XPath expression and return text content of matches.
+    ///
+    /// For best performance, call `ensure_indices()` before querying.
+    /// Works without indices via linear scan fallback, just slower.
     pub fn xpath_text(&'a self, xpath_expr: &str) -> Result<Vec<&'a str>> {
         let expr = xpath::parse_xpath(xpath_expr)?;
         let nodes = self.eval_with_doc_context(&expr)?;
@@ -117,8 +119,8 @@ impl<'a> XmlIndex<'a> {
 
     /// Evaluate an XPath expression and return matching nodes.
     ///
-    /// For relative paths (e.g., `s`, `chapter/para`), evaluation starts from
-    /// the document element, matching libxml2 behavior.
+    /// For best performance, call `ensure_indices()` before querying.
+    /// Works without indices via linear scan fallback, just slower.
     pub fn xpath(&self, xpath_expr: &str) -> Result<Vec<xpath::XPathNode>> {
         let expr = xpath::parse_xpath(xpath_expr)?;
         self.eval_with_doc_context(&expr)

@@ -480,8 +480,8 @@ mod tests {
     #[test]
     fn parallel_matches_sequential_small() {
         let xml = b"<root><a>1</a><b>2</b><c>3</c></root>";
-        let seq = crate::parse(xml).unwrap();
-        let par = parse_parallel(xml, 2).unwrap(); // falls back to sequential (too small)
+        let mut seq = crate::parse(xml).unwrap();
+        let mut par = parse_parallel(xml, 2).unwrap(); // falls back to sequential (too small)
 
         assert_eq!(seq.tag_count(), par.tag_count());
         assert_eq!(seq.tag_types, par.tag_types);
@@ -532,8 +532,8 @@ mod tests {
         let bytes = xml.as_bytes();
         assert!(bytes.len() > MIN_PARALLEL_SIZE);
 
-        let seq = crate::parse(bytes).unwrap();
-        let par = parse_parallel(bytes, 4).unwrap();
+        let mut seq = crate::parse(bytes).unwrap();
+        let mut par = parse_parallel(bytes, 4).unwrap();
 
         // Same number of tags
         assert_eq!(seq.tag_count(), par.tag_count(),
@@ -565,7 +565,7 @@ mod tests {
         xml.push_str("</corpus>");
         let bytes = xml.as_bytes();
 
-        let seq = crate::parse(bytes).unwrap();
+        let mut seq = crate::parse(bytes).unwrap();
         let mut par = parse_parallel(bytes, 4).unwrap();
         par.ensure_indices();
 
@@ -588,10 +588,10 @@ mod tests {
         xml.push_str("</r>");
         let bytes = xml.as_bytes();
 
-        let seq = crate::parse(bytes).unwrap();
+        let mut seq = crate::parse(bytes).unwrap();
 
         for threads in [1, 2, 4, 8] {
-            let par = parse_parallel(bytes, threads).unwrap();
+            let mut par = parse_parallel(bytes, threads).unwrap();
             assert_eq!(seq.tag_count(), par.tag_count(),
                 "tag count mismatch with {} threads", threads);
             assert_eq!(seq.tag_types, par.tag_types,
@@ -699,7 +699,7 @@ mod tests {
         xml.push_str("</root>");
         let bytes = xml.as_bytes();
 
-        let seq = crate::parse(bytes).unwrap();
+        let mut seq = crate::parse(bytes).unwrap();
         let mut par = parse_parallel(bytes, 4).unwrap();
         par.ensure_indices();
 
