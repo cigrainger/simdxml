@@ -413,6 +413,10 @@ fn wildcard_test(input: &str) -> IResult<&str, NodeTest> {
 
 fn name_test(input: &str) -> IResult<&str, NodeTest> {
     let (input, name) = take_while1(|c: char| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ':')(input)?;
+    // Reject axis-like names containing :: (e.g., "child::foo" after @)
+    if name.contains("::") {
+        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+    }
     if let Some(colon_pos) = name.find(':') {
         let prefix = &name[..colon_pos];
         let local = &name[colon_pos + 1..];

@@ -245,6 +245,12 @@ const DOC_ROOT: usize = usize::MAX;
 
 /// Evaluate id('value') — find element with matching ID attribute.
 fn eval_id_function(index: &XmlIndex, args: &[XPathExpr]) -> Result<Vec<XPathNode>> {
+    // id() requires exactly 1 argument
+    if args.len() != 1 {
+        return Err(SimdXmlError::XPathEvalError(
+            format!("id() requires exactly 1 argument, got {}", args.len()),
+        ));
+    }
     let id_value = match args.first() {
         Some(XPathExpr::StringLiteral(s)) => s.clone(),
         _ => return Ok(vec![]),
@@ -539,7 +545,7 @@ fn dedup_nodes(nodes: &mut Vec<XPathNode>) {
         let key = match n {
             XPathNode::Element(idx) => (0, *idx),
             XPathNode::Text(idx) => (1, *idx),
-            XPathNode::Attribute(idx, _h) => (2, *idx),
+            XPathNode::Attribute(idx, h) => (2, *idx ^ (*h as usize)),
             XPathNode::Namespace(idx, h) => (3, *idx ^ (*h as usize)),
         };
         seen.insert(key)
