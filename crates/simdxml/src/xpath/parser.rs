@@ -347,8 +347,15 @@ fn node_type_test(input: &str) -> IResult<&str, NodeTest> {
 }
 
 fn wildcard_test(input: &str) -> IResult<&str, NodeTest> {
-    let (input, _) = char('*')(input)?;
-    Ok((input, NodeTest::Wildcard))
+    // Handle both * and prefix:*
+    if let Some(rest) = input.strip_prefix('*') {
+        return Ok((rest, NodeTest::Wildcard));
+    }
+    // prefix:* — namespace wildcard
+    let (rest, prefix) = take_while1(|c: char| c.is_alphanumeric() || c == '-' || c == '_')(input)?;
+    let (rest, _) = char(':')(rest)?;
+    let (rest, _) = char('*')(rest)?;
+    Ok((rest, NodeTest::NamespacedName(prefix.to_string(), "*".to_string())))
 }
 
 fn name_test(input: &str) -> IResult<&str, NodeTest> {
@@ -525,6 +532,7 @@ fn function_call_expr(input: &str) -> IResult<&str, XPathExpr> {
             nom::error::ErrorKind::Tag,
         )));
     }
+    let (input, _) = multispace0(input)?; // allow whitespace before '('
     let (input, _) = char('(')(input)?;
     let (input, _) = multispace0(input)?;
 
