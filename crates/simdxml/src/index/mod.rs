@@ -437,6 +437,30 @@ impl<'a> XmlIndex<'a> {
         }
     }
 
+    /// Get the raw XML bytes for an element (from opening tag through closing tag).
+    /// For self-closing tags, returns just the tag. For text nodes, returns the text.
+    pub fn raw_xml(&self, tag_idx: usize) -> &'a str {
+        let start = self.tag_starts[tag_idx] as usize;
+        if self.tag_types[tag_idx] == TagType::SelfClose {
+            let end = self.tag_ends[tag_idx] as usize + 1;
+            return unsafe { std::str::from_utf8_unchecked(&self.input[start..end]) };
+        }
+        if let Some(close_idx) = self.matching_close(tag_idx) {
+            let end = self.tag_ends[close_idx] as usize + 1;
+            return unsafe { std::str::from_utf8_unchecked(&self.input[start..end]) };
+        }
+        // Fallback: just the opening tag
+        let end = self.tag_ends[tag_idx] as usize + 1;
+        unsafe { std::str::from_utf8_unchecked(&self.input[start..end]) }
+    }
+
+    /// Get the raw XML bytes for the opening tag at a given index.
+    pub fn raw_tag(&self, tag_idx: usize) -> &'a str {
+        let start = self.tag_starts[tag_idx] as usize;
+        let end = self.tag_ends[tag_idx] as usize + 1;
+        unsafe { std::str::from_utf8_unchecked(&self.input[start..end]) }
+    }
+
     /// Get all text content under a tag (including nested).
     /// Uses precomputed text ranges instead of byte-by-byte tag stripping.
     pub fn all_text(&self, tag_idx: usize) -> String {

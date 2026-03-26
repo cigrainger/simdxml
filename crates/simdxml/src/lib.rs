@@ -35,6 +35,7 @@ pub use error::{Result, SimdXmlError};
 pub use index::XmlIndex;
 pub use persist::OwnedXmlIndex;
 pub use xpath::CompiledXPath;
+pub use xpath::XPathResult;
 
 /// Parse XML bytes and build a structural index.
 ///
@@ -105,9 +106,71 @@ pub fn load_or_parse(xml_path: impl AsRef<std::path::Path>) -> Result<OwnedXmlIn
 
 // Convenience methods on XmlIndex
 impl<'a> XmlIndex<'a> {
-    /// Evaluate an XPath expression and return text content of matches.
+    /// Evaluate an XPath expression, returning either a node set or scalar value.
     ///
-    /// Evaluate an XPath expression and return text content of matches.
+    /// Handles all XPath 1.0 expression types: location paths, functions like
+    /// `string()`, `count()`, `boolean()`, arithmetic, comparisons, etc.
+    pub fn eval(&self, xpath_expr: &str) -> Result<xpath::XPathResult> {
+        let expr = xpath::parse_xpath(xpath_expr)?;
+        // Handle relative paths with doc context
+        match &expr {
+            xpath::XPathExpr::LocationPath(ref path) if !path.absolute => {
+                if let Some(doc_elem) = self.document_element() {
+                    let nodes = xpath::evaluate_from_context(
+                        self, &expr, xpath::XPathNode::Element(doc_elem))?;
+                    return Ok(xpath::XPathResult::NodeSet(nodes));
+                }
+            }
+            _ => {}
+        }
+        xpath::eval_xpath(self, &expr)
+    }
+
+    /// Extract raw XML for each matching XPath node.
+    pub fn xpath_raw(&'a self, xpath_expr: &str) -> Result<Vec<&'a str>> {
+        let nodes = self.xpath(xpath_expr)?;
+        Ok(nodes.iter().map(|node| match *node {
+            xpath::XPathNode::Element(idx) => self.raw_xml(idx),
+            xpath::XPathNode::Text(idx) => self.text_content(&self.text_ranges[idx]),
+            xpath::XPathNode::Attribute(tag_idx, _) | xpath::XPathNode::Namespace(tag_idx, _) => {
+                self.raw_tag(tag_idx)
+            }
+        }).collect())
+    }
+
+    /// Evaluate an XPath expression and return the XPath string-value of each match.
+    ///
+    /// For element nodes, this is the concatenation of all descendant text —
+    /// equivalent to XPath's `string()` function. This is what you usually want
+    /// for display: `<a>hello <b>world</b></a>` → `"hello world"`.
+    ///
+    /// See `xpath_text` for direct child text only.
+    pub fn xpath_string(&self, xpath_expr: &str) -> Result<Vec<String>> {
+        let nodes = self.xpath(xpath_expr)?;
+        let mut results = Vec::with_capacity(nodes.len());
+        for node in &nodes {
+            match *node {
+                xpath::XPathNode::Element(idx) => {
+                    results.push(self.all_text(idx));
+                }
+                xpath::XPathNode::Text(idx) => {
+                    results.push(self.text_content(&self.text_ranges[idx]).to_string());
+                }
+                xpath::XPathNode::Attribute(tag_idx, _) => {
+                    // Get all attribute values and concatenate (simplified)
+                    let raw = self.raw_tag(tag_idx);
+                    results.push(raw.to_string());
+                }
+                xpath::XPathNode::Namespace(_, _) => {}
+            }
+        }
+        Ok(results)
+    }
+
+    /// Evaluate an XPath expression and return direct child text of matches.
+    ///
+    /// For elements like `<a>hello <b>world</b></a>`, returns `["hello "]`
+    /// (only direct text nodes, not descendant element text).
     ///
     /// For best performance, call `ensure_indices()` before querying.
     /// Works without indices via linear scan fallback, just slower.

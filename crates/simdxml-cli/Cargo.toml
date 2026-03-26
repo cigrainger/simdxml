@@ -2,13 +2,17 @@
 name = "simdxml-cli"
 version = "0.1.0"
 edition = "2021"
-description = "Command-line XML/XPath tool powered by SIMD"
+description = "A fast XML/XPath query tool, powered by SIMD"
 license = "MIT OR Apache-2.0"
 
 [[bin]]
-name = "simdxml"
+name = "sxq"
 path = "src/main.rs"
 
 [dependencies]
 simdxml = { path = "../simdxml" }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+anyhow = "1"
+anstream = "0.6"
+owo-colors = { version = "4", features = ["supports-colors"] }
+colorchoice-clap = "1"

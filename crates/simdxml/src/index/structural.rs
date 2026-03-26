@@ -46,7 +46,7 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
         pos += offset;
 
         // Cache current parent once per iteration (was 7+ repeated lookups)
-        let cp = if stop == 0 { u32::MAX } else { pstack[stop - 1] };
+        let cp = if stop == 0 { u32::MAX } else if stop <= MAX_DEPTH { pstack[stop - 1] } else { u32::MAX };
 
         // Text content between previous tag end and this tag start
         let text_start = if last_tag_end > 0 { last_tag_end + 1 } else { 0 };
@@ -89,7 +89,7 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     index.tag_types.push(TagType::Close);
                     index.tag_names.push((name_start as u32, (name_end - name_start) as u16));
                     index.depths.push(depth);
-                    index.parents.push(if stop == 0 { u32::MAX } else { pstack[stop - 1] });
+                    index.parents.push(if stop == 0 { u32::MAX } else if stop <= MAX_DEPTH { pstack[stop - 1] } else { u32::MAX });
 
                     last_tag_end = pos;
                     pos += 1;
@@ -246,7 +246,9 @@ pub fn parse_scalar<'a>(input: &'a [u8]) -> Result<XmlIndex<'a>> {
                     index.parents.push(cp);
 
                     if tag_type == TagType::Open {
-                        pstack[stop] = tag_idx;
+                        if stop < MAX_DEPTH {
+                            pstack[stop] = tag_idx;
+                        }
                         stop += 1;
                         depth += 1;
                     }

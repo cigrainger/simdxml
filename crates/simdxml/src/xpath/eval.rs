@@ -123,6 +123,67 @@ pub enum StandaloneResult {
     Boolean(bool),
 }
 
+/// Result of a top-level XPath evaluation — either a node set or a scalar value.
+#[derive(Debug, Clone)]
+pub enum XPathResult {
+    /// Node set (from location paths, unions, id(), filter expressions)
+    NodeSet(Vec<XPathNode>),
+    /// Scalar string (from string(), concat(), etc.)
+    String(String),
+    /// Scalar number (from count(), sum(), number(), arithmetic)
+    Number(f64),
+    /// Scalar boolean (from boolean(), not(), comparisons)
+    Boolean(bool),
+}
+
+impl XPathResult {
+    /// Format as a display string, matching xmllint behavior.
+    pub fn to_display_string(&self, index: &XmlIndex) -> String {
+        match self {
+            XPathResult::NodeSet(nodes) => {
+                let mut parts = Vec::new();
+                for node in nodes {
+                    parts.push(node_string_value(index, *node));
+                }
+                parts.join("\n")
+            }
+            XPathResult::String(s) => s.clone(),
+            XPathResult::Number(n) => xpath_format_number(*n),
+            XPathResult::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+        }
+    }
+}
+
+/// Evaluate a top-level XPath expression, returning either a node set or scalar.
+///
+/// Unlike `evaluate()` which only handles node-set expressions, this handles
+/// all XPath 1.0 expression types including `string()`, `count()`, `boolean()`,
+/// arithmetic, and comparisons.
+pub fn eval_xpath(index: &XmlIndex, expr: &XPathExpr) -> Result<XPathResult> {
+    // First try as a node-set expression (the common case)
+    match expr {
+        XPathExpr::LocationPath(_)
+        | XPathExpr::Union(_)
+        | XPathExpr::FilterPath(_, _)
+        | XPathExpr::GlobalFilter(_, _) => {
+            return Ok(XPathResult::NodeSet(evaluate(index, expr)?));
+        }
+        XPathExpr::FunctionCall(name, _) if name == "id" => {
+            return Ok(XPathResult::NodeSet(evaluate(index, expr)?));
+        }
+        _ => {}
+    }
+
+    // Scalar expression — evaluate via predicate engine with document root context
+    let doc_root = XPathNode::Element(DOC_ROOT);
+    let value = eval_predicate_value(index, doc_root, expr, 1, 1)?;
+    Ok(match value {
+        XPathValue::Number(n) => XPathResult::Number(n),
+        XPathValue::String(s) => XPathResult::String(s),
+        XPathValue::Boolean(b) => XPathResult::Boolean(b),
+    })
+}
+
 /// Evaluate an XPath expression against an XmlIndex.
 pub fn evaluate<'a>(
     index: &'a XmlIndex<'a>,
