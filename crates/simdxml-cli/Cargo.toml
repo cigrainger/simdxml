@@ -11,8 +11,3 @@ path = "src/main.rs"
 
 [dependencies]
 simdxml = { path = "../simdxml" }
-clap = { version = "4", features = ["derive", "wrap_help"] }
-anyhow = "1"
-anstream = "0.6"
-owo-colors = { version = "4", features = ["supports-colors"] }
-colorchoice-clap = "1"
