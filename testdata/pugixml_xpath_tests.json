@@ -3875,7 +3875,7 @@
     },
     {
       "name": "xpath_string_value_empty",
-      "xml": null,
+      "xml": "<node>headtail</node>",
       "source_file": "test_xpath_functions.cpp",
       "assertions": [
         {
