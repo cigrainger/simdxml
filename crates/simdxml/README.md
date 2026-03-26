@@ -26,6 +26,18 @@ Benchmarked on Apple M4 Max (NEON) and AMD Ryzen 9 3950X (AVX2) against pugixml 
 
 pugixml's single-pass DOM build has lower overhead for queries where parse time dominates. simdxml's advantage grows with file size and attribute density.
 
+**Library parse throughput vs Rust parsers** (M4 Max, criterion):
+
+| File | simdxml | quick-xml | roxmltree | vs quick-xml |
+|------|---------|-----------|-----------|-------------|
+| PubMed 195 MB (1 thread) | 136ms | 153ms | — | **1.1x** |
+| PubMed 195 MB (4 threads) | 92ms | — | — | — |
+| Patent XML 1 MB | 218µs | 289µs | 1,921µs | **1.3x** |
+| Attr-heavy 1 MB | 216µs | 859µs | 3,909µs | **4.0x** |
+| Tiger SVG 69 KB | 20µs | 31µs | 153µs | **1.6x** |
+
+simdxml is consistently faster than quick-xml (a streaming pull parser) and significantly faster than roxmltree (a DOM builder). The gap widens on attribute-dense XML where SIMD quote masking avoids per-character scanning. Unlike quick-xml, simdxml produces a queryable structural index — not just an event stream.
+
 ## Quick Start
 
 ```rust
